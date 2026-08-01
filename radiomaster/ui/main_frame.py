@@ -62,6 +62,8 @@ class MainFrame(wx.Frame):
             buffer_seconds=self.config.get("buffer_seconds", 30),
             output_device=self.config.get("output_device"),
             proxies=self._proxies(),
+            ad_detection_enabled=self.config.get("ad_detection_enabled", False),
+            ad_auto_mute_enabled=self.config.get("ad_auto_mute_enabled", True),
         )
         self.effects_presets = EffectsPresetStore()
         self.effects_state = EffectsStateStore()
@@ -255,6 +257,8 @@ class MainFrame(wx.Frame):
         self.player.proxies = self._proxies()
         self.station_api.set_proxies(self._proxies())
         self.player.set_fade(self.config.get("fade_enabled", False), self.config.get("fade_ms", 800) / 1000)
+        self.player.set_ad_detection_enabled(self.config.get("ad_detection_enabled", False))
+        self.player.set_ad_auto_mute_enabled(self.config.get("ad_auto_mute_enabled", True))
         self._register_hotkeys()
 
     def _on_schedule_trigger(self, sched: Schedule) -> None:

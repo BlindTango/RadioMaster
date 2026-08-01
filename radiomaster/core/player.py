@@ -26,6 +26,7 @@ import sounddevice as sd
 import numpy as np
 
 from ..utils.ffmpeg import find_ffmpeg, find_ffprobe
+from .ad_detection import AdFingerprintStore, SilenceGapDetector, compute_fingerprint, is_ad_title
 from .geo_check import log_if_geo_restricted
 from .icy import icy_metadata_loop
 from .stream_buffer import StreamBuffer
@@ -60,12 +61,26 @@ class Player:
 
     def __init__(self, buffer_seconds: int = 30, output_device: Optional[int] = None,
                  proxies: Optional[dict] = None, ffmpeg_path: Optional[str] = None,
-                 ffprobe_path: Optional[str] = None):
+                 ffprobe_path: Optional[str] = None,
+                 ad_detection_enabled: bool = False, ad_auto_mute_enabled: bool = True,
+                 ad_fingerprint_store: Optional[AdFingerprintStore] = None):
         self.buffer_seconds = buffer_seconds
         self.output_device = output_device
         self.proxies = proxies
         self._ffmpeg = ffmpeg_path
         self._ffprobe = ffprobe_path
+
+        self.ad_detection_enabled = ad_detection_enabled
+        self.ad_auto_mute_enabled = ad_auto_mute_enabled
+        self._ad_store = ad_fingerprint_store or AdFingerprintStore()
+        self._silence_detector = SilenceGapDetector(SAMPLE_RATE, CHANNELS, SAMPLE_WIDTH)
+        self._ad_flagged = False
+        self._ad_muted = False
+        self._ad_capture: Optional[bytearray] = None
+        self._ad_capture_target = 0
+        self._ad_capture_reason = ""
+        self._ad_clear_timer: Optional[threading.Timer] = None
+        self._AD_CLIP_SECONDS = 4.0
 
         self.state = PlayerState.STOPPED
         self.muted = False
@@ -123,6 +138,7 @@ class Player:
         self.on_now_playing: Optional[Callable[[str], None]] = None
         self.on_stream_info: Optional[Callable[[StreamInfo], None]] = None
         self.on_error: Optional[Callable[[str], None]] = None
+        self.on_ad_detected: Optional[Callable[[bool], None]] = None
 
     # ---- public controls ---------------------------------------------------
 
@@ -413,6 +429,15 @@ class Player:
             self._buffer = None
         self.now_playing_title = ""
         self.stream_info = StreamInfo()
+        if self._ad_clear_timer is not None:
+            self._ad_clear_timer.cancel()
+            self._ad_clear_timer = None
+        self._ad_capture = None
+        was_ad_flagged = self._ad_flagged
+        self._ad_flagged = False
+        self._ad_muted = False
+        if was_ad_flagged and self.on_ad_detected:
+            self.on_ad_detected(False)
         self._set_state(PlayerState.STOPPED)
 
     def pause(self) -> None:
@@ -524,7 +549,7 @@ class Player:
             n_bytes = frames * CHANNELS * SAMPLE_WIDTH
             data = self._buffer.read(n_bytes) if self._buffer else b"\x00" * n_bytes
             samples = np.frombuffer(data, dtype=np.int16).astype(np.float32).reshape(-1, CHANNELS)
-            if self.muted:
+            if self.muted or self._ad_muted:
                 samples[:] = 0
             else:
                 gain = self.volume * self._fade_gain
@@ -561,6 +586,8 @@ class Player:
                     break
                 if buf is not None:
                     buf.write(chunk)
+                if self.ad_detection_enabled:
+                    self._feed_ad_detection(chunk, generation)
         except (OSError, ValueError):
             pass
         finally:
@@ -581,7 +608,94 @@ class Player:
             self.now_playing_title = title
             if self.on_now_playing:
                 self.on_now_playing(title)
+            if self.ad_detection_enabled:
+                if is_ad_title(title):
+                    # Cheap and instant: the station is telling us directly, no
+                    # fingerprint match needed to decide — but we still capture
+                    # and remember this clip so a LATER station that never
+                    # announces its (possibly identical, syndicated) ad can
+                    # still be recognized by the fingerprint layer alone.
+                    self._set_ad_flag(True)
+                    self._clear_ad_flag_after(30.0)
+                    self._start_ad_capture("icy")
+                elif self._ad_flagged:
+                    self._set_ad_flag(False)
         icy_metadata_loop(url, self.proxies, stop_event, on_title_changed)
+
+    def _start_ad_capture(self, reason: str) -> None:
+        if self._ad_capture is not None:
+            return  # already capturing another candidate clip -- let that finish first
+        self._ad_capture = bytearray()
+        self._ad_capture_target = int(BYTES_PER_SECOND * self._AD_CLIP_SECONDS)
+        self._ad_capture_reason = reason
+
+    def _feed_ad_detection(self, chunk: bytes, generation: int) -> None:
+        """Reactive tap that runs alongside normal playback -- never delays
+        audio reaching the buffer. Fires a fresh capture either when the ICY
+        loop flags an announced ad break, or (for stations that never
+        announce anything) when the silence-gap detector notices a
+        candidate boundary worth checking against previously-seen ad clips.
+        """
+        if self._ad_capture is not None:
+            self._ad_capture.extend(chunk)
+            if len(self._ad_capture) >= self._ad_capture_target:
+                captured, reason = bytes(self._ad_capture), self._ad_capture_reason
+                self._ad_capture = None
+                threading.Thread(
+                    target=self._analyze_ad_capture, args=(captured, reason, generation), daemon=True).start()
+            return
+        if self._silence_detector.feed(chunk):
+            self._start_ad_capture("repeat")
+
+    def _analyze_ad_capture(self, pcm: bytes, reason: str, generation: int) -> None:
+        if generation != self._decode_generation:
+            return  # station/effects changed mid-capture -- stale, irrelevant now
+        fingerprint = compute_fingerprint(pcm, SAMPLE_RATE, CHANNELS)
+        if fingerprint is None:
+            return
+        match = self._ad_store.find_match(fingerprint)
+        if reason == "icy":
+            # Flag/timer were already set synchronously by the ICY handler;
+            # this just grows (or reinforces) the known-ads library.
+            if match is not None:
+                self._ad_store.bump(match)
+            else:
+                self._ad_store.remember(fingerprint, self._AD_CLIP_SECONDS, self.station_name, "icy")
+            return
+        if match is not None:
+            self._ad_store.bump(match)
+            self._set_ad_flag(True)
+            self._clear_ad_flag_after(match.get("duration", self._AD_CLIP_SECONDS))
+
+    def _set_ad_flag(self, flagged: bool) -> None:
+        if flagged == self._ad_flagged:
+            return
+        if self._ad_clear_timer is not None:
+            self._ad_clear_timer.cancel()
+            self._ad_clear_timer = None
+        self._ad_flagged = flagged
+        self._ad_muted = flagged and self.ad_auto_mute_enabled
+        if self.on_ad_detected:
+            self.on_ad_detected(flagged)
+
+    def _clear_ad_flag_after(self, seconds: float) -> None:
+        if self._ad_clear_timer is not None:
+            self._ad_clear_timer.cancel()
+        seconds = min(max(seconds, 1.0), 60.0)  # sane cap regardless of what a stored/estimated duration says
+        self._ad_clear_timer = threading.Timer(seconds, lambda: self._set_ad_flag(False))
+        self._ad_clear_timer.daemon = True
+        self._ad_clear_timer.start()
+
+    def set_ad_detection_enabled(self, enabled: bool) -> None:
+        self.ad_detection_enabled = enabled
+        if not enabled:
+            self._ad_capture = None
+            if self._ad_flagged:
+                self._set_ad_flag(False)
+
+    def set_ad_auto_mute_enabled(self, enabled: bool) -> None:
+        self.ad_auto_mute_enabled = enabled
+        self._ad_muted = self._ad_flagged and enabled
 
     def _probe_loop(self, url: str, generation: int) -> None:
         ffprobe = self._ffprobe or find_ffprobe()

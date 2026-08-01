@@ -34,6 +34,8 @@ _DEFAULTS = {
     "fade_enabled": False,
     "fade_ms": 800,
     "mute_playback_while_recording": False,
+    "ad_detection_enabled": False,
+    "ad_auto_mute_enabled": True,
     "hotkeys": {
         "play_pause": "Ctrl+Alt+P",
         "stop": "Ctrl+Alt+S",

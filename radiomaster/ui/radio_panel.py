@@ -198,6 +198,7 @@ class RadioPanel(scrolled.ScrolledPanel):
         # status bar stuck on "Connecting" forever.
         self._connecting_station_name: Optional[str] = None
         self._connecting_since = 0.0
+        self._ad_flagged = False
 
         search_label = wx.StaticText(self, label="&Search:")
         self.search_ctrl = wx.TextCtrl(self, style=wx.TE_PROCESS_ENTER)
@@ -286,6 +287,7 @@ class RadioPanel(scrolled.ScrolledPanel):
         self.player.on_now_playing = self._on_now_playing
         self.player.on_stream_info = self._on_stream_info
         self.player.on_error = self._on_player_error
+        self.player.on_ad_detected = self._on_ad_detected
 
         self._status_timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self._on_status_tick, self._status_timer)
@@ -568,6 +570,12 @@ class RadioPanel(scrolled.ScrolledPanel):
     def _on_stream_info(self, info: StreamInfo) -> None:
         self._connecting_station_name = None
 
+    def _on_ad_detected(self, flagged: bool) -> None:
+        call_after_safe(self, self._set_ad_flagged, flagged)
+
+    def _set_ad_flagged(self, flagged: bool) -> None:
+        self._ad_flagged = flagged
+
     def _on_player_error(self, message: str) -> None:
         call_after_safe(self, self.set_status, f"Status: Error — {message}")
         call_after_safe(self, self.controls.set_playing, False)
@@ -585,6 +593,7 @@ class RadioPanel(scrolled.ScrolledPanel):
         info = self.player.stream_info
         self.set_status(format_status(
             state_label, info.bitrate_kbps, info.codec, info.sample_rate, self.player.buffer_fill,
+            self._ad_flagged,
         ))
         self._refresh_recordings_list()
 

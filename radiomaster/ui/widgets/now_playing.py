@@ -47,7 +47,8 @@ class NowPlayingPanel(wx.Panel):
 
 
 def format_status(state_label: str, bitrate_kbps: int = 0, codec: str = "",
-                   sample_rate: int = 0, buffer_fill: float = 0.0) -> str:
+                   sample_rate: int = 0, buffer_fill: float = 0.0,
+                   ad_flagged: bool = False) -> str:
     parts = [f"Status: {state_label}"]
     if bitrate_kbps:
         parts.append(f"{bitrate_kbps} kbps")
@@ -56,4 +57,6 @@ def format_status(state_label: str, bitrate_kbps: int = 0, codec: str = "",
     if sample_rate:
         parts.append(f"{sample_rate} Hz")
     parts.append(f"Buffer: {int(buffer_fill * 100)}%")
+    if ad_flagged:
+        parts.append("Likely advertisement")
     return " | ".join(parts)

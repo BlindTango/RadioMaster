@@ -133,6 +133,13 @@ class SettingsPanel(scrolled.ScrolledPanel):
             self, label="&Mute live playback while recording (recording is unaffected)")
         self.mute_while_recording_check.SetValue(config.get("mute_playback_while_recording", False))
 
+        self.ad_detection_check = wx.CheckBox(
+            self, label="Detect and flag likely &advertisement breaks (experimental)")
+        self.ad_detection_check.SetValue(config.get("ad_detection_enabled", False))
+        self.ad_auto_mute_check = wx.CheckBox(
+            self, label="Automatically m&ute audio during a detected ad break")
+        self.ad_auto_mute_check.SetValue(config.get("ad_auto_mute_enabled", True))
+
         self.hotkeys_btn = wx.Button(self, label="Configure &Global Hotkeys...")
 
         self.apply_btn = wx.Button(self, label="&Apply")
@@ -170,6 +177,8 @@ class SettingsPanel(scrolled.ScrolledPanel):
         outer.Add(self.fade_check, 0, wx.LEFT, 10)
         outer.Add(row("Fade duration (&ms):", self.fade_ms_ctrl), 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 10)
         outer.Add(self.mute_while_recording_check, 0, wx.LEFT, 10)
+        outer.Add(self.ad_detection_check, 0, wx.LEFT, 10)
+        outer.Add(self.ad_auto_mute_check, 0, wx.LEFT, 10)
         outer.Add(self.hotkeys_btn, 0, wx.ALL, 6)
         outer.Add(row("Log &level:", self.log_level_choice), 0, wx.EXPAND | wx.ALL, 6)
         outer.Add(self.apply_btn, 0, wx.ALL, 10)
@@ -284,6 +293,8 @@ class SettingsPanel(scrolled.ScrolledPanel):
         self.config.set("fade_enabled", self.fade_check.GetValue(), save=False)
         self.config.set("fade_ms", self.fade_ms_ctrl.GetValue(), save=False)
         self.config.set("mute_playback_while_recording", self.mute_while_recording_check.GetValue(), save=False)
+        self.config.set("ad_detection_enabled", self.ad_detection_check.GetValue(), save=False)
+        self.config.set("ad_auto_mute_enabled", self.ad_auto_mute_check.GetValue(), save=False)
         new_log_level = LOG_LEVELS[self.log_level_choice.GetSelection()]
         self.config.set("log_level", new_log_level, save=False)
         set_log_level(new_log_level)
