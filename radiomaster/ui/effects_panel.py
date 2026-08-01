@@ -14,6 +14,24 @@ from ..core.player import Player
 from ..utils.accessibility import accessible_label
 
 
+def _slider_scale(step: float) -> int:
+    """Ticks-per-unit for representing a float Param on an integer wx.Slider."""
+    step = step or 1
+    return max(round(1 / step), 1)
+
+
+def _decimals_for_step(step: float) -> int:
+    text = repr(float(step or 1))
+    if "." not in text:
+        return 0
+    return len(text.split(".")[1].rstrip("0"))
+
+
+def _format_value(value: float, decimals: int, unit: str) -> str:
+    text = f"{value:.{decimals}f}"
+    return f"{text} {unit}" if unit else text
+
+
 class ParamPanel(wx.Panel):
     """Dynamically builds one control per Param for a given effect spec."""
 
@@ -23,27 +41,25 @@ class ParamPanel(wx.Panel):
         self.sizer.AddGrowableCol(1, 1)
         self.SetSizer(self.sizer)
         self._controls: dict[str, wx.Window] = {}
+        # (kind, scale) per param key, needed to convert a slider's integer
+        # position back to the real int/float value in get_values().
+        self._meta: dict[str, tuple[str, int]] = {}
 
     def build(self, params: list[Param], values: dict, on_change: Optional[Callable[[], None]] = None) -> None:
         self.sizer.Clear(delete_windows=True)
         self._controls.clear()
+        self._meta.clear()
 
         for param in params:
             unit_suffix = f" ({param.unit})" if param.unit else ""
             accessible_name = f"{param.label}{unit_suffix}"
-            # This wx.StaticText, immediately preceding ctrl in the same
-            # sizer, gives ctrl its accessible name via Windows' native
-            # "adjacent static labels its sibling" convention for SIMPLE
-            # controls (wx.Choice, wx.ListBox). It does NOT work for
-            # wx.SpinCtrl/wx.SpinCtrlDouble: those are composite controls
-            # (an outer Pane wrapping an inner Edit + Spinner sub-window),
-            # so the true adjacent sibling in Z-order is not this label and
-            # screen readers announce nothing. For those we additionally
-            # call ctrl.SetLabel() below, which sets the composite control's
-            # accessible Name directly without touching its displayed value
-            # (verified empirically: no crash, unlike wx.Accessible
-            # subclassing — see utils/accessibility.py — and unlike
-            # SetLabel() on a plain wx.TextCtrl, which asserts).
+            # wx.SpinCtrl/wx.SpinCtrlDouble render as composite controls on
+            # Windows (an outer Pane wrapping an inner Edit + Spinner), and
+            # screen readers focus/announce the inner Edit — which stays
+            # unnamed no matter what accessible name is set on the composite
+            # (verified: NVDA never spoke it). A plain wx.Slider is a single
+            # native control, so accessible_label()'s preceding-sibling
+            # convention reaches it directly and NVDA announces it correctly.
             label = wx.StaticText(self, label=f"{accessible_name}:")
             value = values.get(param.key, param.default)
 
@@ -55,26 +71,39 @@ class ParamPanel(wx.Panel):
                     ctrl.SetSelection(0)
                 if on_change:
                     ctrl.Bind(wx.EVT_CHOICE, lambda e: on_change())
-            elif param.kind == "int":
-                ctrl = wx.SpinCtrl(self, min=int(param.min), max=int(param.max), initial=int(value))
-                ctrl.SetLabel(accessible_name)
+                self._controls[param.key] = ctrl
+                self.sizer.Add(label, 0, wx.ALIGN_CENTER_VERTICAL)
+                self.sizer.Add(ctrl, 1, wx.EXPAND)
+                continue
+
+            scale = 1 if param.kind == "int" else _slider_scale(param.step)
+            decimals = 0 if param.kind == "int" else _decimals_for_step(param.step)
+            slider_min = round(param.min * scale)
+            slider_max = round(param.max * scale)
+            slider_val = min(max(round(float(value) * scale), slider_min), slider_max)
+
+            accessible_label(self, accessible_name)
+            ctrl = wx.Slider(self, value=slider_val, minValue=slider_min, maxValue=slider_max,
+                              style=wx.SL_HORIZONTAL)
+            ctrl.SetLineSize(max(1, round(param.step * scale)))
+            value_label = wx.StaticText(self, label=_format_value(slider_val / scale, decimals, param.unit))
+
+            def _on_slide(event: wx.Event, ctrl=ctrl, value_label=value_label,
+                          scale=scale, decimals=decimals, unit=param.unit) -> None:
+                value_label.SetLabel(_format_value(ctrl.GetValue() / scale, decimals, unit))
                 if on_change:
-                    ctrl.Bind(wx.EVT_SPINCTRL, lambda e: on_change())
-                    ctrl.Bind(wx.EVT_TEXT, lambda e: on_change())
-            else:  # float
-                ctrl = wx.SpinCtrlDouble(
-                    self, min=param.min, max=param.max, initial=float(value),
-                    inc=param.step or 0.1,
-                )
-                ctrl.SetDigits(3)
-                ctrl.SetLabel(accessible_name)
-                if on_change:
-                    ctrl.Bind(wx.EVT_SPINCTRLDOUBLE, lambda e: on_change())
-                    ctrl.Bind(wx.EVT_TEXT, lambda e: on_change())
+                    on_change()
+
+            ctrl.Bind(wx.EVT_SLIDER, _on_slide)
 
             self._controls[param.key] = ctrl
+            self._meta[param.key] = (param.kind, scale)
+
+            row = wx.BoxSizer(wx.HORIZONTAL)
+            row.Add(ctrl, 1, wx.EXPAND | wx.RIGHT, 6)
+            row.Add(value_label, 0, wx.ALIGN_CENTER_VERTICAL)
             self.sizer.Add(label, 0, wx.ALIGN_CENTER_VERTICAL)
-            self.sizer.Add(ctrl, 1, wx.EXPAND)
+            self.sizer.Add(row, 1, wx.EXPAND)
 
         self.Layout()
         parent_sizer = self.GetContainingSizer()
@@ -87,10 +116,10 @@ class ParamPanel(wx.Panel):
             if isinstance(ctrl, wx.Choice):
                 idx = ctrl.GetSelection()
                 values[key] = ctrl.GetString(idx) if idx != wx.NOT_FOUND else ""
-            elif isinstance(ctrl, wx.SpinCtrlDouble):
-                values[key] = ctrl.GetValue()
-            elif isinstance(ctrl, wx.SpinCtrl):
-                values[key] = ctrl.GetValue()
+            elif isinstance(ctrl, wx.Slider):
+                kind, scale = self._meta[key]
+                raw = ctrl.GetValue() / scale
+                values[key] = int(raw) if kind == "int" else raw
         return values
 
 

@@ -39,15 +39,19 @@ right before a wx.ListBox/wx.Choice makes uiautomation report the exact
 label text as that control's Name, with no visual change and no crash across
 repeated Tab-focus stress tests. accessible_label() below wraps that pattern.
 
-CAVEAT — wx.SpinCtrl / wx.SpinCtrlDouble: these render on Windows as a
-composite control (an outer Pane wrapping an inner Edit + Spinner/UpDown
-sub-window), so the preceding-sibling convention above does NOT reach the
-inner Edit that a screen reader actually focuses (verified: its Name stays
-empty either way). For these, call ctrl.SetLabel(name) directly on the
-SpinCtrl/SpinCtrlDouble itself — verified this sets the outer composite's
-accessible Name correctly, does NOT raise (SpinCtrl/SpinCtrlDouble aren't
-wx.TextCtrl subclasses, so they don't hit the TextCtrl SetLabel assertion),
-and does NOT alter the displayed numeric value.
+CAVEAT — wx.SpinCtrl / wx.SpinCtrlDouble: avoid these for anything a screen
+reader needs to use at all. They render on Windows as a composite control
+(an outer Pane wrapping an inner Edit + Spinner/UpDown sub-window), and a
+screen reader focuses/announces the inner Edit, not the outer Pane. Calling
+ctrl.SetLabel(name) on the composite does set the outer Pane's UIA Name
+(verified with uiautomation — no crash, doesn't touch the displayed value),
+but NVDA still announces nothing when Tabbing in, because it reads the
+focused inner Edit's Name (empty) rather than falling back to the ancestor
+Pane's name (verified against a live NVDA session — the SetLabel() fix
+looked correct in uiautomation's tree dump but was NOT actually spoken).
+There is no known way to make NVDA announce a name for these composite
+controls. Use wx.Slider (see below) instead for anything needing a spoken
+label.
 
 CAVEAT — wx.Slider with wx.SL_LABELS: this style makes wx continuously
 overwrite the Slider's own accessible Name with its current numeric value
