@@ -174,3 +174,28 @@ def build_active_filter_chain(preset_store: EffectsPresetStore, state_store: Eff
             params = EFFECT_SPECS[effect_id].default_params()
         stages.append(EFFECT_SPECS[effect_id].build_filter(params))
     return ",".join(stages)
+
+
+def build_preview_filter_chain(
+    preset_store: EffectsPresetStore, state_store: EffectsStateStore,
+    preview_effect_id: str, preview_params: dict,
+) -> str:
+    """Like build_active_filter_chain(), but substitutes `preview_params` for
+    `preview_effect_id`'s stage (using them regardless of that effect's saved
+    preset) and includes that stage even if the effect isn't currently
+    enabled — so the Effects page can preview live, unsaved parameter edits
+    against the actual playing stream before the user decides to save them
+    as a preset or turn the effect on."""
+    stages = []
+    for effect_id in CHAIN_ORDER:
+        if effect_id == preview_effect_id:
+            stages.append(EFFECT_SPECS[effect_id].build_filter(preview_params))
+            continue
+        if not state_store.is_enabled(effect_id):
+            continue
+        preset_name = state_store.selected_preset(effect_id)
+        params = preset_store.get_preset(effect_id, preset_name)
+        if params is None:
+            params = EFFECT_SPECS[effect_id].default_params()
+        stages.append(EFFECT_SPECS[effect_id].build_filter(params))
+    return ",".join(stages)

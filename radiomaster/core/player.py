@@ -23,6 +23,7 @@ from dataclasses import dataclass
 from typing import Callable, Optional
 
 import sounddevice as sd
+import numpy as np
 
 from ..utils.ffmpeg import find_ffmpeg, find_ffprobe
 from .geo_check import log_if_geo_restricted
@@ -155,7 +156,8 @@ class Player:
         # waiting for the crossfade to finish.
         self._station_generation += 1
         self._start_icy_thread(url, self._station_generation)
-        self._probe_thread = threading.Thread(target=self._probe_loop, args=(url,), daemon=True)
+        self._probe_thread = threading.Thread(
+            target=self._probe_loop, args=(url, self._station_generation), daemon=True)
         self._probe_thread.start()
 
         threading.Thread(
@@ -263,7 +265,8 @@ class Player:
         self._station_generation += 1
         self._start_icy_thread(url, self._station_generation)
 
-        self._probe_thread = threading.Thread(target=self._probe_loop, args=(url,), daemon=True)
+        self._probe_thread = threading.Thread(
+            target=self._probe_loop, args=(url, self._station_generation), daemon=True)
         self._probe_thread.start()
 
     def _start_icy_thread(self, url: str, generation: int) -> None:
@@ -451,6 +454,8 @@ class Player:
         output stream, ICY thread, and probe thread are left running, so
         there's no device-reopen click and no drop in volume.
         """
+        if filter_chain == self.effects_chain:
+            return  # no actual change — skip a pointless (and jitter-causing) restart
         self.effects_chain = filter_chain
         if self.state in (PlayerState.PLAYING, PlayerState.PAUSED, PlayerState.CONNECTING) and self.url:
             self._restart_decode_only()
@@ -518,7 +523,6 @@ class Player:
                 return
             n_bytes = frames * CHANNELS * SAMPLE_WIDTH
             data = self._buffer.read(n_bytes) if self._buffer else b"\x00" * n_bytes
-            import numpy as np
             samples = np.frombuffer(data, dtype=np.int16).astype(np.float32).reshape(-1, CHANNELS)
             if self.muted:
                 samples[:] = 0
@@ -579,7 +583,7 @@ class Player:
                 self.on_now_playing(title)
         icy_metadata_loop(url, self.proxies, stop_event, on_title_changed)
 
-    def _probe_loop(self, url: str) -> None:
+    def _probe_loop(self, url: str, generation: int) -> None:
         ffprobe = self._ffprobe or find_ffprobe()
         if not ffprobe:
             return
@@ -593,6 +597,8 @@ class Player:
                 cmd, capture_output=True, timeout=15,
                 creationflags=CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
             )
+            if generation != self._station_generation:
+                return  # a newer station switch beat this (slow) probe back — discard
             data = json.loads(result.stdout or b"{}")
             streams = data.get("streams") or []
             if not streams:

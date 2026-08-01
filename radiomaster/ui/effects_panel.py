@@ -7,7 +7,10 @@ from typing import Callable, Optional
 import wx
 
 from ..core.effects import DISPLAY_ORDER, EFFECT_SPECS, Param
-from ..core.effects_store import EffectsPresetStore
+from ..core.effects_store import (
+    EffectsPresetStore, EffectsStateStore, build_active_filter_chain, build_preview_filter_chain,
+)
+from ..core.player import Player
 from ..utils.accessibility import accessible_label
 
 
@@ -21,7 +24,7 @@ class ParamPanel(wx.Panel):
         self.SetSizer(self.sizer)
         self._controls: dict[str, wx.Window] = {}
 
-    def build(self, params: list[Param], values: dict) -> None:
+    def build(self, params: list[Param], values: dict, on_change: Optional[Callable[[], None]] = None) -> None:
         self.sizer.Clear(delete_windows=True)
         self._controls.clear()
 
@@ -41,14 +44,22 @@ class ParamPanel(wx.Panel):
                     ctrl.SetSelection(list(param.choices).index(value))
                 elif param.choices:
                     ctrl.SetSelection(0)
+                if on_change:
+                    ctrl.Bind(wx.EVT_CHOICE, lambda e: on_change())
             elif param.kind == "int":
                 ctrl = wx.SpinCtrl(self, min=int(param.min), max=int(param.max), initial=int(value))
+                if on_change:
+                    ctrl.Bind(wx.EVT_SPINCTRL, lambda e: on_change())
+                    ctrl.Bind(wx.EVT_TEXT, lambda e: on_change())
             else:  # float
                 ctrl = wx.SpinCtrlDouble(
                     self, min=param.min, max=param.max, initial=float(value),
                     inc=param.step or 0.1,
                 )
                 ctrl.SetDigits(3)
+                if on_change:
+                    ctrl.Bind(wx.EVT_SPINCTRLDOUBLE, lambda e: on_change())
+                    ctrl.Bind(wx.EVT_TEXT, lambda e: on_change())
 
             self._controls[param.key] = ctrl
             self.sizer.Add(label, 0, wx.ALIGN_CENTER_VERTICAL)
@@ -73,11 +84,22 @@ class ParamPanel(wx.Panel):
 
 
 class EffectsPanel(wx.Panel):
-    def __init__(self, parent, preset_store: EffectsPresetStore,
-                 on_presets_changed: Optional[Callable[[], None]] = None):
+    # How long to wait after the user stops dragging/typing a parameter
+    # before actually restarting the ffmpeg decode pipeline to preview it —
+    # each preview is a real process restart (network reconnect + ffmpeg
+    # startup), so applying it on every single slider tick/keystroke would
+    # itself become a new source of audible jitter. This debounce is what
+    # lets "hear it live while tuning" not fight with "don't make it choppy".
+    _PREVIEW_DEBOUNCE_MS = 400
+
+    def __init__(self, parent, preset_store: EffectsPresetStore, state_store: EffectsStateStore,
+                 player: Player, on_presets_changed: Optional[Callable[[], None]] = None):
         super().__init__(parent)
         self.preset_store = preset_store
+        self.state_store = state_store
+        self.player = player
         self.on_presets_changed = on_presets_changed
+        self._previewing = False
 
         accessible_label(self, "Effect")
         self.effect_list = wx.ListBox(self, choices=[EFFECT_SPECS[e].display_name for e in DISPLAY_ORDER])
@@ -95,6 +117,9 @@ class EffectsPanel(wx.Panel):
         self.note_label.Wrap(400)
 
         self.param_panel = ParamPanel(self)
+
+        self._preview_timer = wx.Timer(self)
+        self.Bind(wx.EVT_TIMER, self._on_preview_timer, self._preview_timer)
 
         preset_row = wx.BoxSizer(wx.HORIZONTAL)
         preset_row.Add(wx.StaticText(self, label="&Preset:"), 0, wx.ALIGN_CENTER_VERTICAL | wx.RIGHT, 6)
@@ -120,6 +145,7 @@ class EffectsPanel(wx.Panel):
         self.rename_btn.Bind(wx.EVT_BUTTON, self._on_rename)
         self.delete_btn.Bind(wx.EVT_BUTTON, self._on_delete)
         self.save_btn.Bind(wx.EVT_BUTTON, self._on_save)
+        self.Bind(wx.EVT_WINDOW_DESTROY, self._on_destroy)
 
         self._load_effect()
 
@@ -129,7 +155,9 @@ class EffectsPanel(wx.Panel):
     def _load_effect(self) -> None:
         effect_id = self._current_effect_id()
         spec = EFFECT_SPECS[effect_id]
-        self.note_label.SetLabel(spec.note)
+        self.note_label.SetLabel(
+            f"{spec.note} Adjust the parameters below to hear them live against "
+            f"the current stream before saving.")
 
         names = self.preset_store.preset_names(effect_id)
         self.preset_choice.Clear()
@@ -143,11 +171,50 @@ class EffectsPanel(wx.Panel):
         spec = EFFECT_SPECS[effect_id]
         idx = self.preset_choice.GetSelection()
         if idx == wx.NOT_FOUND:
-            self.param_panel.build(spec.params, spec.default_params())
+            self.param_panel.build(spec.params, spec.default_params(), on_change=self._on_param_changed)
+        else:
+            name = self.preset_choice.GetString(idx)
+            values = self.preset_store.get_preset(effect_id, name) or spec.default_params()
+            self.param_panel.build(spec.params, values, on_change=self._on_param_changed)
+        # Preview the newly-loaded effect/preset immediately (not just on the
+        # next edit) so switching the effect list or preset choice is itself
+        # audible right away.
+        self._apply_preview_now()
+
+    # ---- live preview --------------------------------------------------------
+
+    def _on_param_changed(self) -> None:
+        # Restart (rather than just start) the one-shot timer so a burst of
+        # changes (dragging a slider, typing a number) only actually applies
+        # once things settle for _PREVIEW_DEBOUNCE_MS.
+        self._preview_timer.Start(self._PREVIEW_DEBOUNCE_MS, wx.TIMER_ONE_SHOT)
+
+    def _on_preview_timer(self, event: wx.TimerEvent) -> None:
+        self._apply_preview_now()
+
+    def _apply_preview_now(self) -> None:
+        effect_id = self._current_effect_id()
+        params = self.param_panel.get_values()
+        if not params:
             return
-        name = self.preset_choice.GetString(idx)
-        values = self.preset_store.get_preset(effect_id, name) or spec.default_params()
-        self.param_panel.build(spec.params, values)
+        chain = build_preview_filter_chain(self.preset_store, self.state_store, effect_id, params)
+        self._previewing = True
+        self.player.apply_effects(chain)
+
+    def stop_preview(self) -> None:
+        """Restores playback to the real, saved, enabled-effects chain.
+        Called when navigating away from this page so an unsaved preview
+        tweak doesn't silently keep affecting playback afterwards."""
+        self._preview_timer.Stop()
+        if not self._previewing:
+            return
+        self._previewing = False
+        self.player.apply_effects(build_active_filter_chain(self.preset_store, self.state_store))
+
+    def _on_destroy(self, event: wx.WindowDestroyEvent) -> None:
+        if event.GetEventObject() is self:
+            self.stop_preview()
+        event.Skip()
 
     def _on_new(self, event: wx.CommandEvent) -> None:
         effect_id = self._current_effect_id()

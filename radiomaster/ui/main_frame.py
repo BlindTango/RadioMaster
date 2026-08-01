@@ -95,7 +95,8 @@ class MainFrame(wx.Frame):
             self.listbook, self.favourites, self.custom_stations, self.schedule_store, self.scheduler,
         )
         self.effects_panel = EffectsPanel(
-            self.listbook, self.effects_presets, self.radio_panel.effects_box.refresh_all_presets,
+            self.listbook, self.effects_presets, self.effects_state, self.player,
+            self.radio_panel.effects_box.refresh_all_presets,
         )
         self.settings_panel = SettingsPanel(
             self.listbook, self.config, self._on_settings_applied,
@@ -234,9 +235,17 @@ class MainFrame(wx.Frame):
         self.status_bar.SetStatusText(text)
 
     def _on_page_changed(self, event: wx.BookCtrlEvent) -> None:
-        if self.listbook.GetPage(event.GetSelection()) is self.favourites_panel:
+        old_page = self.listbook.GetPage(event.GetOldSelection()) if event.GetOldSelection() != wx.NOT_FOUND else None
+        new_page = self.listbook.GetPage(event.GetSelection())
+        if old_page is self.effects_panel and new_page is not self.effects_panel:
+            # Leaving the Effects page: drop any live preview override so
+            # playback goes back to whatever's actually enabled/saved,
+            # rather than leaving the last previewed-but-unsaved tweak
+            # silently in effect.
+            self.effects_panel.stop_preview()
+        if new_page is self.favourites_panel:
             self.favourites_panel.refresh()
-        elif self.listbook.GetPage(event.GetSelection()) is self.scheduler_panel:
+        elif new_page is self.scheduler_panel:
             self.scheduler_panel.refresh()
         event.Skip()
 

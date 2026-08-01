@@ -5,6 +5,7 @@ from __future__ import annotations
 import logging
 import os
 import threading
+import time
 from typing import Callable, Optional
 
 import wx
@@ -184,6 +185,19 @@ class RadioPanel(scrolled.ScrolledPanel):
         # first (now-stale) response was arriving AFTER the second and
         # winning the race.
         self._search_seq = 0
+        # Set while a station switch is in flight so the 1s status tick
+        # (which otherwise repaints over it with the generic state/bitrate
+        # line) keeps showing "Connecting to X..." instead — gapless
+        # switching keeps PlayerState.PLAYING the whole time (the OLD
+        # station keeps audibly playing until the new one is ready), so
+        # there was no player-state change at all for the status bar to
+        # reflect; this tracks the switch independently of player state.
+        # Cleared as soon as the new station's probe/metadata confirms it's
+        # actually up, or after _CONNECT_TIMEOUT_SECONDS as a fallback so a
+        # station that never sends usable probe/ICY data doesn't leave the
+        # status bar stuck on "Connecting" forever.
+        self._connecting_station_name: Optional[str] = None
+        self._connecting_since = 0.0
 
         search_label = wx.StaticText(self, label="&Search:")
         self.search_ctrl = wx.TextCtrl(self, style=wx.TE_PROCESS_ENTER)
@@ -383,7 +397,10 @@ class RadioPanel(scrolled.ScrolledPanel):
         # Immediate feedback rather than waiting for the next 1s status tick —
         # without this there's up to a second where the status bar still
         # shows the PREVIOUS station's state/bitrate with nothing indicating
-        # a new connection is even in progress.
+        # a new connection is even in progress. _connecting_station_name
+        # keeps this showing across subsequent ticks too (see _on_status_tick).
+        self._connecting_station_name = station.name
+        self._connecting_since = time.monotonic()
         self.set_status(f"Status: Connecting to {station.name}...")
         self.player.start(station.url, station_name=station.name)
         threading.Thread(target=self.station_api.click, args=(station.uuid,), daemon=True).start()
@@ -405,6 +422,7 @@ class RadioPanel(scrolled.ScrolledPanel):
         # stopping what you're listening to must never interrupt a recording
         # of a different (or even the same) station.
         self.player.stop()
+        self._connecting_station_name = None
         self.now_playing.set_station("")
         self.now_playing.set_now_playing("")
 
@@ -537,16 +555,25 @@ class RadioPanel(scrolled.ScrolledPanel):
         call_after_safe(self, self.controls.set_playing, state in (PlayerState.PLAYING, PlayerState.CONNECTING))
 
     def _on_now_playing(self, title: str) -> None:
+        self._connecting_station_name = None
         call_after_safe(self, self.now_playing.set_now_playing, title)
 
     def _on_stream_info(self, info: StreamInfo) -> None:
-        pass  # picked up by the status tick
+        self._connecting_station_name = None
 
     def _on_player_error(self, message: str) -> None:
         call_after_safe(self, self.set_status, f"Status: Error — {message}")
         call_after_safe(self, self.controls.set_playing, False)
 
+    _CONNECT_TIMEOUT_SECONDS = 10.0
+
     def _on_status_tick(self, event: wx.TimerEvent) -> None:
+        if self._connecting_station_name is not None:
+            if time.monotonic() - self._connecting_since < self._CONNECT_TIMEOUT_SECONDS:
+                self.set_status(f"Status: Connecting to {self._connecting_station_name}...")
+                self._refresh_recordings_list()
+                return
+            self._connecting_station_name = None  # gave up waiting for confirmation; fall through
         state_label = self.player.state.value.title()
         info = self.player.stream_info
         self.set_status(format_status(

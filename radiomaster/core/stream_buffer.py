@@ -19,7 +19,6 @@ class StreamBuffer:
         self._chunks: deque[bytes] = deque()
         self._size = 0
         self._lock = threading.Lock()
-        self._not_empty = threading.Condition(self._lock)
         self._closed = False
 
     def resize(self, capacity_bytes: int) -> None:
@@ -36,13 +35,21 @@ class StreamBuffer:
             while self._size > self._capacity and len(self._chunks) > 1:
                 dropped = self._chunks.popleft()
                 self._size -= len(dropped)
-            self._not_empty.notify_all()
 
-    def read(self, n: int, timeout: float = 0.5) -> bytes:
-        """Return up to n bytes, blocking briefly for data; zero-pads if starved."""
+    def read(self, n: int) -> bytes:
+        """Return up to n bytes immediately, zero-padding if starved.
+
+        Called from the sounddevice output callback, which runs on a
+        real-time audio thread — it MUST return within a few milliseconds
+        or PortAudio has nothing to play and the whole device underruns
+        audibly. This used to block (via a Condition.wait) for up to 500ms
+        whenever the buffer ran dry, which turned every brief network hiccup
+        into a guaranteed audible stutter far worse than a bit of silence;
+        never blocking here (prebuffering before playback starts is what
+        actually prevents starvation — see _prime_then_open_output) is what
+        fixed it.
+        """
         with self._lock:
-            if self._size == 0 and not self._closed:
-                self._not_empty.wait(timeout=timeout)
             out = bytearray()
             while len(out) < n and self._chunks:
                 chunk = self._chunks[0]
@@ -67,7 +74,6 @@ class StreamBuffer:
     def close(self) -> None:
         with self._lock:
             self._closed = True
-            self._not_empty.notify_all()
 
     @property
     def fill_level(self) -> float:
