@@ -383,6 +383,19 @@ class Player:
                 pass
             return
 
+        if not prebuffer:
+            # The new process produced no audio at all -- almost always an
+            # ffmpeg filter it rejected outright (e.g. an effect parameter
+            # combination out of range) rather than a real stream drop.
+            # Abandon the swap and leave the still-healthy old process
+            # running instead of trading a working stream for a dead one.
+            try:
+                new_proc.kill()
+            except Exception:
+                pass
+            log.warning("Effect change produced no audio from ffmpeg; keeping previous effect chain.")
+            return
+
         old_proc = self._proc
         if old_proc is not None:
             try:

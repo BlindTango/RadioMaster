@@ -78,7 +78,12 @@ def _build_distortion(p: dict) -> str:
 
 
 def _build_echo(p: dict) -> str:
-    return f"aecho={p['in_gain']}:{p['out_gain']}:{p['delay_ms']}:{p['decay']}"
+    # aecho rejects a delay or decay of exactly 0 outright and ffmpeg exits
+    # immediately -- clamp both away from 0 so dragging either slider all the
+    # way down fades the echo out instead of killing the decode process.
+    delay_ms = max(1, int(p['delay_ms']))
+    decay = max(0.001, float(p['decay']))
+    return f"aecho={p['in_gain']}:{p['out_gain']}:{delay_ms}:{decay}"
 
 
 def _build_flanger(p: dict) -> str:
@@ -125,8 +130,12 @@ def _build_reverb(p: dict) -> str:
     # mix instead scaling the echo-tap decay levels directly, so it actually
     # controls reverb wetness without touching the dry level.
     mix = float(p["mix"])
-    delays = "|".join(str(int(d * room)) for d in (29, 37, 44, 51))
-    decays = "|".join(f"{decay * f * mix:.3f}" for f in (0.7, 0.55, 0.4, 0.3))
+    # aecho rejects a decay of exactly 0 outright and ffmpeg exits immediately,
+    # so dragging "Decay" or "Wet/dry mix" down to 0 must fade the reverb out
+    # rather than produce a literal 0.000 tap -- clamp every tap to a tiny but
+    # non-zero floor.
+    delays = "|".join(str(max(1, int(d * room))) for d in (29, 37, 44, 51))
+    decays = "|".join(f"{max(0.001, decay * f * mix):.3f}" for f in (0.7, 0.55, 0.4, 0.3))
     return f"aecho=1.0:1.0:{delays}:{decays}"
 
 
