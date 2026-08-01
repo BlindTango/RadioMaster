@@ -1,0 +1,24 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+
+# PyInstaller build output
+build/
+dist/
+installer_output/
+
+# Runtime app state (generated next to the source when running unfrozen)
+config.json
+effects_presets.json
+effects_state.json
+stations.db
+logs/
+*.log
+@AutomationLog.txt
+
+# Editor/OS
+.vscode/
+Thumbs.db
