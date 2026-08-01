@@ -27,6 +27,8 @@ import numpy as np
 
 from ..utils.ffmpeg import find_ffmpeg, find_ffprobe
 from .ad_detection import AdFingerprintStore, SilenceGapDetector, compute_fingerprint, is_ad_title
+from .dsp import EffectChain
+from .effects import CHAIN_ORDER, EFFECT_SPECS
 from .geo_check import log_if_geo_restricted
 from .icy import icy_metadata_loop
 from .stream_buffer import StreamBuffer
@@ -90,7 +92,10 @@ class Player:
         self.now_playing_title = ""
         self.url = ""
         self.station_name = ""
-        self.effects_chain = ""
+        # Real-time DSP effect chain, applied directly to decoded PCM in the
+        # output audio callback (see _open_output_stream) -- see apply_effects()
+        # for why this replaced the old ffmpeg `-af` filter-string approach.
+        self._effect_chain = EffectChain(CHAIN_ORDER)
         self.fade_enabled = False
         self.fade_seconds = 0.8
         self._fade_gain = 1.0
@@ -112,17 +117,15 @@ class Player:
         self._stop_event = threading.Event()
         self._paused = threading.Event()
         # Bumped every time the decode subprocess is deliberately replaced
-        # (see apply_effects()/_restart_decode_only()), so a reader thread
-        # whose process was killed on purpose can tell the difference from a
-        # genuine dropped connection and skip firing on_error/_fail().
+        # (station switches), so a reader thread whose process was killed on
+        # purpose can tell the difference from a genuine dropped connection
+        # and skip firing on_error/_fail(). Effect changes no longer touch
+        # this at all -- they're applied directly to the DSP chain (see
+        # apply_effects()) with no decode restart involved.
         self._decode_generation = 0
         # Bumped only on an actual station change (cold start / gapless
-        # switch) — deliberately NOT bumped by _restart_decode_only()
-        # (effect toggles), which replaces the decode process but keeps
-        # listening to the SAME station's metadata connection. Used to
-        # detect stale ICY callbacks from a superseded station; using
-        # _decode_generation for that instead would wrongly discard valid
-        # metadata updates every time an effect was toggled.
+        # switch). Used to detect stale ICY callbacks from a superseded
+        # station.
         self._station_generation = 0
         # Signals the CURRENT icy_metadata_loop connection to unblock and
         # exit as soon as a station switch/stop supersedes it. Without this,
@@ -299,9 +302,12 @@ class Player:
         self._icy_thread.start()
 
     def _spawn_decode_process(self, url: str) -> Optional[subprocess.Popen]:
-        """Builds and launches the ffmpeg decode subprocess for `url` using the
-        current effects_chain. Shared by start() and _restart_decode_only()
-        so an effect change re-launches exactly the same kind of process."""
+        """Builds and launches the ffmpeg decode subprocess for `url`. This
+        subprocess is a pure decoder now -- audio effects are applied
+        afterwards, directly to the decoded PCM, by the DSP effect chain in
+        _open_output_stream()'s callback (see apply_effects()), so this
+        command never needs an `-af` chain and never needs restarting when
+        an effect changes."""
         ffmpeg = self._ffmpeg or find_ffmpeg()
         if not ffmpeg:
             self._fail("FFmpeg was not found. Place ffmpeg.exe in resources/ffmpeg/ or install it on PATH.")
@@ -312,10 +318,6 @@ class Player:
             "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
             "-i", url,
             "-vn",
-        ]
-        if self.effects_chain:
-            cmd += ["-af", self.effects_chain]
-        cmd += [
             "-f", "s16le", "-acodec", "pcm_s16le",
             "-ac", str(CHANNELS), "-ar", str(SAMPLE_RATE),
             "pipe:1",
@@ -328,92 +330,6 @@ class Player:
         except OSError as exc:
             self._fail(f"Failed to launch FFmpeg: {exc}")
             return None
-
-    def _restart_decode_only(self) -> None:
-        """Swaps out just the ffmpeg decode subprocess for one built with the
-        current effects_chain, leaving the sounddevice output stream, the ICY
-        thread, and the probe thread completely untouched. Used by
-        apply_effects() so toggling an effect doesn't reopen the audio
-        device (which caused an audible click and a drastic volume drop).
-
-        The new process needs to reconnect to the stream over the network
-        and warm up its decoder before it produces any audio — that alone
-        can take anywhere from tens of milliseconds to well over a second,
-        and killing the OLD process immediately (as this used to) meant the
-        ring buffer ran dry for that whole window: an audible gap every
-        single time an effect was toggled. Instead, the new process's
-        output is pre-buffered on a background thread — with the OLD
-        process still running and still feeding playback — and only
-        swapped in once enough new-effect audio is ready, so the old effect
-        keeps playing gap-free right up until the instant the new one is
-        ready to take over.
-        """
-        if not self.url:
-            return
-        self._decode_generation += 1
-        generation = self._decode_generation
-
-        new_proc = self._spawn_decode_process(self.url)
-        if new_proc is None:
-            return
-
-        threading.Thread(
-            target=self._prebuffer_and_swap, args=(new_proc, generation), daemon=True).start()
-
-    def _prebuffer_and_swap(self, new_proc: subprocess.Popen, generation: int,
-                             prebuffer_seconds: float = 0.35, timeout_seconds: float = 5.0) -> None:
-        prebuffer = bytearray()
-        target_bytes = int(BYTES_PER_SECOND * prebuffer_seconds)
-        deadline = time.monotonic() + timeout_seconds
-        try:
-            while len(prebuffer) < target_bytes and time.monotonic() < deadline:
-                if generation != self._decode_generation:
-                    return  # a newer effect change superseded this one — abandon, leave old_proc running
-                chunk = new_proc.stdout.read(8192)
-                if not chunk:
-                    break  # new process died/EOF'd before producing enough — swap with whatever we have
-                prebuffer.extend(chunk)
-        except (OSError, ValueError):
-            pass
-
-        if generation != self._decode_generation:
-            try:
-                new_proc.kill()
-            except Exception:
-                pass
-            return
-
-        if not prebuffer:
-            # The new process produced no audio at all -- almost always an
-            # ffmpeg filter it rejected outright (e.g. an effect parameter
-            # combination out of range) rather than a real stream drop.
-            # Abandon the swap and leave the still-healthy old process
-            # running instead of trading a working stream for a dead one.
-            try:
-                new_proc.kill()
-            except Exception:
-                pass
-            log.warning("Effect change produced no audio from ffmpeg; keeping previous effect chain.")
-            return
-
-        old_proc = self._proc
-        if old_proc is not None:
-            try:
-                old_proc.kill()
-                old_proc.wait(timeout=2)
-            except Exception:
-                pass
-        # Kill the old process (and let its reader thread's loop condition
-        # go false) BEFORE touching the buffer, or a last write from the old
-        # reader thread could land after the prebuffered new-effect audio.
-        self._proc = new_proc
-        if self._buffer is not None:
-            self._buffer.clear()
-            self._buffer.write(bytes(prebuffer))
-
-        self._reader_thread = threading.Thread(
-            target=self._read_loop, args=(new_proc, self._buffer, generation), daemon=True)
-        self._reader_thread.start()
 
     def stop(self) -> None:
         if self.fade_enabled and self._out_stream is not None and self._fade_gain > 0.0:
@@ -483,20 +399,23 @@ class Player:
         """pan is 0.0 (full left) .. 1.0 (full right), 0.5 = centre."""
         self.pan = max(0.0, min(1.0, pan))
 
-    def apply_effects(self, filter_chain: str) -> None:
-        """Set the ffmpeg -af filter chain built from the enabled effects/presets.
-
-        ffmpeg filters are graph-compiled at process start, so changing them
-        mid-stream means restarting the decode subprocess. Only the decode
-        subprocess is restarted (_restart_decode_only) — the sounddevice
-        output stream, ICY thread, and probe thread are left running, so
-        there's no device-reopen click and no drop in volume.
+    def apply_effects(self, effect_stages: list) -> None:
+        """Update the real-time DSP effect chain from an ordered list of
+        (effect_id, params) tuples (see effects_store.build_active_effect_chain/
+        build_preview_effect_chain) -- every effect_id not present is turned
+        off. Applied directly to already-decoded PCM inside the output audio
+        callback, so this never restarts ffmpeg, never reconnects to the
+        stream, and never reopens the audio device: changes are instant and
+        a bad parameter can't crash playback, unlike the old ffmpeg `-af`
+        filtergraph approach this replaced.
         """
-        if filter_chain == self.effects_chain:
-            return  # no actual change — skip a pointless (and jitter-causing) restart
-        self.effects_chain = filter_chain
-        if self.state in (PlayerState.PLAYING, PlayerState.PAUSED, PlayerState.CONNECTING) and self.url:
-            self._restart_decode_only()
+        active_ids = {effect_id for effect_id, _ in effect_stages}
+        stages_by_id = dict(effect_stages)
+        for effect_id, spec in EFFECT_SPECS.items():
+            if effect_id in active_ids:
+                self._effect_chain.set_stage(effect_id, True, stages_by_id[effect_id], spec)
+            else:
+                self._effect_chain.set_stage(effect_id, False, {}, spec)
 
     def set_buffer_seconds(self, seconds: int) -> None:
         self.buffer_seconds = seconds
@@ -562,6 +481,11 @@ class Player:
             n_bytes = frames * CHANNELS * SAMPLE_WIDTH
             data = self._buffer.read(n_bytes) if self._buffer else b"\x00" * n_bytes
             samples = np.frombuffer(data, dtype=np.int16).astype(np.float32).reshape(-1, CHANNELS)
+            # DSP effect chain, applied to normalized [-1, 1] samples before
+            # volume/pan/mute -- matches where ffmpeg's -af chain used to sit
+            # in the pipeline (upstream of this player-side gain stage).
+            processed = self._effect_chain.process(samples / 32768.0)
+            samples = np.clip(processed, -1.0, 1.0) * 32768.0
             if self.muted or self._ad_muted:
                 samples[:] = 0
             else:

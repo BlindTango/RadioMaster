@@ -1,4 +1,4 @@
-"""Effects page: full CRUD over presets for each effect, exposing every ffmpeg filter parameter."""
+"""Effects page: full CRUD over presets for each effect, exposing every DSP parameter."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ import wx
 
 from ..core.effects import DISPLAY_ORDER, EFFECT_SPECS, Param
 from ..core.effects_store import (
-    EffectsPresetStore, EffectsStateStore, build_active_filter_chain, build_preview_filter_chain,
+    EffectsPresetStore, EffectsStateStore, build_active_effect_chain, build_preview_effect_chain,
 )
 from ..core.player import Player
 from ..utils.accessibility import accessible_label
@@ -85,11 +85,10 @@ class ParamPanel(wx.Panel):
 
 class EffectsPanel(wx.Panel):
     # How long to wait after the user stops dragging/typing a parameter
-    # before actually restarting the ffmpeg decode pipeline to preview it —
-    # each preview is a real process restart (network reconnect + ffmpeg
-    # startup), so applying it on every single slider tick/keystroke would
-    # itself become a new source of audible jitter. This debounce is what
-    # lets "hear it live while tuning" not fight with "don't make it choppy".
+    # before previewing it. The DSP chain applies changes instantly with no
+    # decode restart, so this is just a UI nicety now (avoids recomputing
+    # filter coefficients on every single slider tick/keystroke) rather than
+    # working around an audible ffmpeg-restart glitch.
     _PREVIEW_DEBOUNCE_MS = 400
 
     def __init__(self, parent, preset_store: EffectsPresetStore, state_store: EffectsStateStore,
@@ -197,9 +196,9 @@ class EffectsPanel(wx.Panel):
         params = self.param_panel.get_values()
         if not params:
             return
-        chain = build_preview_filter_chain(self.preset_store, self.state_store, effect_id, params)
+        stages = build_preview_effect_chain(self.preset_store, self.state_store, effect_id, params)
         self._previewing = True
-        self.player.apply_effects(chain)
+        self.player.apply_effects(stages)
 
     def stop_preview(self) -> None:
         """Restores playback to the real, saved, enabled-effects chain.
@@ -209,7 +208,7 @@ class EffectsPanel(wx.Panel):
         if not self._previewing:
             return
         self._previewing = False
-        self.player.apply_effects(build_active_filter_chain(self.preset_store, self.state_store))
+        self.player.apply_effects(build_active_effect_chain(self.preset_store, self.state_store))
 
     def _on_destroy(self, event: wx.WindowDestroyEvent) -> None:
         if event.GetEventObject() is self:

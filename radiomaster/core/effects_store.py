@@ -162,8 +162,12 @@ class EffectsStateStore:
         self.save()
 
 
-def build_active_filter_chain(preset_store: EffectsPresetStore, state_store: EffectsStateStore) -> str:
-    """Build the full ffmpeg -af filter string for every currently enabled effect."""
+def build_active_effect_chain(
+    preset_store: EffectsPresetStore, state_store: EffectsStateStore,
+) -> list[tuple[str, dict]]:
+    """Build the ordered list of (effect_id, params) for every currently
+    enabled effect -- fed to Player.apply_effects() to update the real-time
+    DSP chain directly, with no decode restart involved."""
     stages = []
     for effect_id in CHAIN_ORDER:
         if not state_store.is_enabled(effect_id):
@@ -172,24 +176,27 @@ def build_active_filter_chain(preset_store: EffectsPresetStore, state_store: Eff
         params = preset_store.get_preset(effect_id, preset_name)
         if params is None:
             params = EFFECT_SPECS[effect_id].default_params()
-        stages.append(EFFECT_SPECS[effect_id].build_filter(params))
-    return ",".join(stages)
+        stages.append((effect_id, params))
+    return stages
 
 
-def build_preview_filter_chain(
+def build_preview_effect_chain(
     preset_store: EffectsPresetStore, state_store: EffectsStateStore,
     preview_effect_id: str, preview_params: dict,
-) -> str:
-    """Like build_active_filter_chain(), but substitutes `preview_params` for
+) -> list[tuple[str, dict]]:
+    """Like build_active_effect_chain(), but substitutes `preview_params` for
     `preview_effect_id`'s stage (using them regardless of that effect's saved
     preset) and includes that stage even if the effect isn't currently
     enabled — so the Effects page can preview live, unsaved parameter edits
     against the actual playing stream before the user decides to save them
-    as a preset or turn the effect on."""
+    as a preset or turn the effect on. Since the DSP chain applies instantly
+    with no decode restart, this preview is truly live -- no debounce is
+    strictly required anymore, though the UI still applies one to avoid
+    updating a dozen times per drag gesture."""
     stages = []
     for effect_id in CHAIN_ORDER:
         if effect_id == preview_effect_id:
-            stages.append(EFFECT_SPECS[effect_id].build_filter(preview_params))
+            stages.append((effect_id, preview_params))
             continue
         if not state_store.is_enabled(effect_id):
             continue
@@ -197,5 +204,5 @@ def build_preview_filter_chain(
         params = preset_store.get_preset(effect_id, preset_name)
         if params is None:
             params = EFFECT_SPECS[effect_id].default_params()
-        stages.append(EFFECT_SPECS[effect_id].build_filter(params))
-    return ",".join(stages)
+        stages.append((effect_id, params))
+    return stages

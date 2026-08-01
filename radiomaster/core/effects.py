@@ -1,23 +1,38 @@
-"""Audio effects engine: parameter schemas + ffmpeg audio-filter ("-af") builders.
+"""Audio effects engine: parameter schemas + real-time DSP wiring.
 
-Each effect maps to a real ffmpeg `libavfilter` audio filter. Two of the eight
-classic DirectX effect names have no direct ffmpeg equivalent, so they are
-approximated with the closest available filter (documented per-effect below):
+Each effect used to compile to an ffmpeg `libavfilter` audio filter, baked
+into the decode subprocess's `-af` chain -- meaning every parameter tweak
+required killing and relaunching ffmpeg and reconnecting to the stream, and
+a single out-of-range value (e.g. an aecho decay of exactly 0) could crash
+ffmpeg and the whole stream with it.
 
-- Reverb  -> multi-tap `aecho` (ffmpeg ships no dedicated reverb filter)
-- Gargle  -> `tremolo` (amplitude modulation; DirectX Gargle used a square
-             wave, this uses ffmpeg's sinusoidal tremolo as the nearest stock
-             filter)
+Effects are now applied as a chain of numpy DSP processors (see dsp.py)
+directly to already-decoded PCM inside the audio output callback, so
+changes are instant and can never crash the stream. `make_processor` builds
+a fresh stateful processor instance for an effect; `apply_params` converts
+this effect's own UI parameter dict into whatever that processor's update
+method expects and applies it. Two of the eight classic DirectX effect
+names have no off-the-shelf DSP equivalent, so they're approximated
+(documented per-effect below):
 
-The other six map directly: Chorus->chorus, Compressor->acompressor,
-Distortion->asoftclip, Echo->aecho, Flanger->flanger,
-Equalizer->10-band chained `equalizer` (ISO graphic-EQ centre frequencies).
+- Reverb  -> multi-tap recirculating delay (dsp.MultiTapDelay)
+- Gargle  -> sinusoidal amplitude modulation / tremolo (dsp.Tremolo);
+             DirectX Gargle used a square wave, this is the closest simple
+             substitute.
+
+The other six map onto: Equalizer -> 10-band peaking EQ (dsp.Equalizer),
+Compressor -> dsp.Compressor, Distortion -> dsp.Distortion (soft-clip
+waveshaping), Echo -> dsp.MultiTapDelay (single tap), Flanger/Chorus ->
+dsp.ModulatedDelay (LFO-modulated delay line, different parameter ranges).
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Callable, Literal
+
+from . import dsp
+from .dsp import EQ_BANDS_HZ
 
 ParamKind = Literal["float", "int", "choice"]
 
@@ -40,108 +55,123 @@ class EffectSpec:
     id: str
     display_name: str
     params: list[Param]
-    build_filter: Callable[[dict], str]
+    make_processor: Callable[[], object]
+    apply_params: Callable[[object, dict], None]
     note: str = ""
 
     def default_params(self) -> dict:
         return {p.key: p.default for p in self.params}
 
 
-_EQ_BANDS_HZ = [31, 62, 125, 250, 500, 1000, 2000, 4000, 8000, 16000]
-
-
 def _eq_params() -> list[Param]:
     return [
         Param(f"gain_{hz}", f"{hz} Hz gain", "float", 0.0, -12, 12, 0.5, unit="dB")
-        for hz in _EQ_BANDS_HZ
+        for hz in EQ_BANDS_HZ
     ]
 
 
-def _build_equalizer(p: dict) -> str:
-    stages = [
-        f"equalizer=f={hz}:width_type=o:width=1:g={p.get(f'gain_{hz}', 0.0)}"
-        for hz in _EQ_BANDS_HZ
-    ]
-    return ",".join(stages)
+def _mk_equalizer() -> dsp.Equalizer:
+    return dsp.Equalizer()
 
 
-def _build_compressor(p: dict) -> str:
-    return (
-        f"acompressor=threshold={p['threshold']}:ratio={p['ratio']}:"
-        f"attack={p['attack']}:release={p['release']}:makeup={p['makeup']}:"
-        f"knee={p['knee']}:mix={p['mix']}"
+def _apply_equalizer(proc: dsp.Equalizer, p: dict) -> None:
+    proc.update(p)
+
+
+def _mk_compressor() -> dsp.Compressor:
+    return dsp.Compressor()
+
+
+def _apply_compressor(proc: dsp.Compressor, p: dict) -> None:
+    proc.update(p)
+
+
+def _mk_distortion() -> dsp.Distortion:
+    return dsp.Distortion()
+
+
+def _apply_distortion(proc: dsp.Distortion, p: dict) -> None:
+    proc.update(p)
+
+
+def _mk_delay() -> dsp.MultiTapDelay:
+    return dsp.MultiTapDelay()
+
+
+def _apply_echo(proc: dsp.MultiTapDelay, p: dict) -> None:
+    # A delay/decay of exactly 0 used to make ffmpeg's aecho exit outright;
+    # the DSP delay line tolerates 0 fine, but keep the same tiny floor so
+    # dragging a slider to its minimum fades the echo out rather than
+    # snapping it to a literal zero-length tap.
+    delay_ms = max(1.0, float(p["delay_ms"]))
+    decay = max(0.001, float(p["decay"]))
+    proc.set_taps(
+        in_gain=float(p["in_gain"]), out_gain=float(p["out_gain"]),
+        taps_ms_decay=[(delay_ms, decay)],
     )
 
 
-def _build_distortion(p: dict) -> str:
-    return f"asoftclip=type={p['type']}:param={p['param']}:oversample={p['oversample']}"
+def _mk_reverb() -> dsp.MultiTapDelay:
+    return dsp.MultiTapDelay()
 
 
-def _build_echo(p: dict) -> str:
-    # aecho rejects a delay or decay of exactly 0 outright and ffmpeg exits
-    # immediately -- clamp both away from 0 so dragging either slider all the
-    # way down fades the echo out instead of killing the decode process.
-    delay_ms = max(1, int(p['delay_ms']))
-    decay = max(0.001, float(p['decay']))
-    return f"aecho={p['in_gain']}:{p['out_gain']}:{delay_ms}:{decay}"
-
-
-def _build_flanger(p: dict) -> str:
-    return (
-        f"flanger=delay={p['delay_ms']}:depth={p['depth_ms']}:regen={p['regen_pct']}:"
-        f"width={p['width_pct']}:speed={p['speed_hz']}:shape={p['shape']}:"
-        f"phase={p['phase_pct']}:interp={p['interp']}"
-    )
-
-
-def _build_chorus(p: dict) -> str:
-    return (
-        f"chorus={p['in_gain']}:{p['out_gain']}:{p['delay_ms']}:"
-        f"{p['decay']}:{p['speed_hz']}:{p['depth_ms']}"
-    )
-
-
-def _build_gargle(p: dict) -> str:
-    return f"tremolo=f={p['frequency_hz']}:d={p['depth']}"
-
-
-def _build_loudness(p: dict) -> str:
-    # dynaudnorm, not the two-pass loudnorm filter: loudnorm's first pass
-    # needs to measure the WHOLE file before applying gain, which doesn't
-    # exist for a live, unbounded stream. dynaudnorm adapts continuously
-    # (sliding Gaussian-smoothed window) so it works single-pass on live
-    # audio. targetrms is what actually evens out perceived loudness between
-    # stations (peak-only normalization alone still lets a quiet station
-    # stay quiet if it never reaches peak); maxgain caps how hard a very
-    # quiet stream gets boosted so near-silence doesn't get amplified into
-    # audible noise.
-    return (
-        f"dynaudnorm=framelen=500:gausssize=31:peak=0.95:"
-        f"maxgain={p['max_gain']}:targetrms={p['target_loudness']}:compress={p['compress']}"
-    )
-
-
-def _build_reverb(p: dict) -> str:
+def _apply_reverb(proc: dsp.MultiTapDelay, p: dict) -> None:
     room = 0.6 + float(p["room_size"])
     decay = float(p["decay"])
-    # aecho's in_gain/out_gain scale the WHOLE output, not the wet/dry
-    # balance — feeding "mix" into out_gain (as this used to) cut the
-    # overall stream volume as mix rose above 0. Fixed at unity here, with
-    # mix instead scaling the echo-tap decay levels directly, so it actually
-    # controls reverb wetness without touching the dry level.
     mix = float(p["mix"])
-    # aecho rejects a decay of exactly 0 outright and ffmpeg exits immediately,
-    # so dragging "Decay" or "Wet/dry mix" down to 0 must fade the reverb out
-    # rather than produce a literal 0.000 tap -- clamp every tap to a tiny but
-    # non-zero floor.
-    delays = "|".join(str(max(1, int(d * room))) for d in (29, 37, 44, 51))
-    decays = "|".join(f"{max(0.001, decay * f * mix):.3f}" for f in (0.7, 0.55, 0.4, 0.3))
-    return f"aecho=1.0:1.0:{delays}:{decays}"
+    taps = [(29 * room, max(0.001, decay * f * mix)) for f in (0.7, 0.55, 0.4, 0.3)]
+    proc.set_taps(in_gain=1.0, out_gain=1.0, taps_ms_decay=taps)
+
+
+def _mk_modulated_delay() -> dsp.ModulatedDelay:
+    return dsp.ModulatedDelay()
+
+
+def _apply_flanger(proc: dsp.ModulatedDelay, p: dict) -> None:
+    proc.update({
+        "base_delay_ms": float(p["delay_ms"]),
+        "depth_ms": float(p["depth_ms"]),
+        "speed_hz": float(p["speed_hz"]),
+        "feedback": float(p["regen_pct"]) / 100.0,
+        "mix": float(p["width_pct"]) / 100.0,
+        "phase_deg": float(p["phase_pct"]) / 100.0 * 360.0,
+        "in_gain": 1.0, "out_gain": 1.0,
+        "shape": "triangular" if p["shape"] == "triangular" else "sine",
+    })
+
+
+def _apply_chorus(proc: dsp.ModulatedDelay, p: dict) -> None:
+    proc.update({
+        "base_delay_ms": float(p["delay_ms"]),
+        "depth_ms": float(p["depth_ms"]),
+        "speed_hz": float(p["speed_hz"]),
+        "feedback": 0.0,  # ffmpeg's chorus has no feedback, just a mixed delayed voice
+        "mix": max(0.0, min(1.0, float(p["decay"]))),
+        "phase_deg": 90.0,  # fixed stereo spread between L/R modulation for width
+        "in_gain": float(p["in_gain"]), "out_gain": float(p["out_gain"]),
+        "shape": "sine",
+    })
+
+
+def _mk_tremolo() -> dsp.Tremolo:
+    return dsp.Tremolo()
+
+
+def _apply_gargle(proc: dsp.Tremolo, p: dict) -> None:
+    proc.update(p)
+
+
+def _mk_loudness() -> dsp.LoudnessNormalizer:
+    return dsp.LoudnessNormalizer()
+
+
+def _apply_loudness(proc: dsp.LoudnessNormalizer, p: dict) -> None:
+    proc.update(p)
 
 
 EFFECT_SPECS: dict[str, EffectSpec] = {
     "equalizer": EffectSpec(
-        "equalizer", "Equalizer", _eq_params(), _build_equalizer,
+        "equalizer", "Equalizer", _eq_params(), _mk_equalizer, _apply_equalizer,
         note="10-band graphic EQ (ISO centre frequencies), +/-12 dB per band.",
     ),
     "compressor": EffectSpec(
@@ -155,7 +185,7 @@ EFFECT_SPECS: dict[str, EffectSpec] = {
             Param("knee", "Knee", "float", 2.82843, 1, 8, 0.1),
             Param("mix", "Mix", "float", 1.0, 0, 1, 0.05),
         ],
-        _build_compressor,
+        _mk_compressor, _apply_compressor,
     ),
     "distortion": EffectSpec(
         "distortion", "Distortion",
@@ -166,24 +196,18 @@ EFFECT_SPECS: dict[str, EffectSpec] = {
             Param("param", "Shape", "float", 1.0, 0.01, 10, 0.1),
             Param("oversample", "Oversample", "int", 1, 1, 64, 1),
         ],
-        _build_distortion,
-        note="Soft-clip distortion (ffmpeg has no filter literally named 'distortion').",
+        _mk_distortion, _apply_distortion,
+        note="Soft-clip waveshaping distortion.",
     ),
     "echo": EffectSpec(
         "echo", "Echo",
         [
-            # ffmpeg's aecho in_gain/out_gain scale the WHOLE output (dry
-            # signal included), not just the echo tap — its own doc defaults
-            # of 0.6/0.3 were measured (via volumedetect) to cut overall
-            # loudness by ~12dB the instant Echo is enabled. Defaulting both
-            # to 1.0 keeps the dry level intact; "decay" alone controls how
-            # audible the echo itself is.
             Param("in_gain", "Input gain", "float", 1.0, 0, 1, 0.05),
             Param("out_gain", "Output gain", "float", 1.0, 0, 1, 0.05),
             Param("delay_ms", "Delay", "int", 1000, 0, 90000, 10, unit="ms"),
             Param("decay", "Decay", "float", 0.5, 0, 1, 0.05),
         ],
-        _build_echo,
+        _mk_delay, _apply_echo,
     ),
     "flanger": EffectSpec(
         "flanger", "Flanger",
@@ -197,13 +221,11 @@ EFFECT_SPECS: dict[str, EffectSpec] = {
             Param("phase_pct", "Phase", "float", 25.0, 0, 100, 1, unit="%"),
             Param("interp", "Interpolation", "choice", "linear", choices=("linear", "quadratic")),
         ],
-        _build_flanger,
+        _mk_modulated_delay, _apply_flanger,
     ),
     "chorus": EffectSpec(
         "chorus", "Chorus",
         [
-            # Same master-output-gain trap as aecho above (verified: ffmpeg's
-            # own defaults of 0.4/0.4 cut overall loudness by ~13dB).
             Param("in_gain", "Input gain", "float", 1.0, 0, 1, 0.05),
             Param("out_gain", "Output gain", "float", 1.0, 0, 1, 0.05),
             Param("delay_ms", "Delay", "float", 55.0, 20, 100, 1, unit="ms"),
@@ -211,7 +233,7 @@ EFFECT_SPECS: dict[str, EffectSpec] = {
             Param("speed_hz", "Speed", "float", 0.25, 0.1, 5, 0.05, unit="Hz"),
             Param("depth_ms", "Depth", "float", 2.0, 0, 10, 0.1, unit="ms"),
         ],
-        _build_chorus,
+        _mk_modulated_delay, _apply_chorus,
     ),
     "gargle": EffectSpec(
         "gargle", "Gargle",
@@ -219,8 +241,8 @@ EFFECT_SPECS: dict[str, EffectSpec] = {
             Param("frequency_hz", "Frequency", "float", 5.0, 0.1, 30, 0.1, unit="Hz"),
             Param("depth", "Depth", "float", 0.5, 0, 1, 0.05),
         ],
-        _build_gargle,
-        note="Amplitude-modulation approximation of DirectX Gargle (ffmpeg tremolo filter).",
+        _mk_tremolo, _apply_gargle,
+        note="Amplitude-modulation approximation of DirectX Gargle.",
     ),
     "reverb": EffectSpec(
         "reverb", "Reverb",
@@ -229,8 +251,8 @@ EFFECT_SPECS: dict[str, EffectSpec] = {
             Param("decay", "Decay", "float", 0.4, 0, 1, 0.05),
             Param("mix", "Wet/dry mix", "float", 0.3, 0, 1, 0.05),
         ],
-        _build_reverb,
-        note="Multi-tap echo approximation of reverb (ffmpeg ships no dedicated reverb filter).",
+        _mk_reverb, _apply_reverb,
+        note="Multi-tap recirculating-delay approximation of reverb.",
     ),
     "loudness": EffectSpec(
         "loudness", "Loudness Normalization",
@@ -239,11 +261,10 @@ EFFECT_SPECS: dict[str, EffectSpec] = {
             Param("max_gain", "Max gain", "float", 15.0, 1.0, 50.0, 1.0),
             Param("compress", "Extra compression", "float", 0.0, 0.0, 30.0, 0.5),
         ],
-        _build_loudness,
+        _mk_loudness, _apply_loudness,
         note="Evens out loudness between stations so the same volume % sounds "
-             "about the same everywhere (ffmpeg dynaudnorm — single-pass, safe "
-             "for live streams; the alternative loudnorm filter needs a full "
-             "first pass over the whole file, which a live stream doesn't have).",
+             "about the same everywhere -- a causal, real-time automatic gain "
+             "control riding a smoothed RMS envelope toward the target level.",
     ),
 }
 

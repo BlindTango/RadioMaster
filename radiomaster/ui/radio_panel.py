@@ -13,7 +13,7 @@ import wx.lib.scrolledpanel as scrolled
 
 from ..core.custom_stations import CustomStationsStore
 from ..core.effects import DISPLAY_ORDER, EFFECT_SPECS
-from ..core.effects_store import EffectsPresetStore, EffectsStateStore, build_active_filter_chain
+from ..core.effects_store import EffectsPresetStore, EffectsStateStore, build_active_effect_chain
 from ..core.favourites import FavouritesStore
 from ..core.player import Player, PlayerState, StreamInfo
 from ..core.recorder import StationRecordingSession
@@ -281,7 +281,7 @@ class RadioPanel(scrolled.ScrolledPanel):
         self.controls.set_pan(saved_pan)
         self.player.set_pan(saved_pan / 100)
 
-        self.player.apply_effects(build_active_filter_chain(effects_presets, effects_state))
+        self.player.apply_effects(build_active_effect_chain(effects_presets, effects_state))
 
         self.player.on_state_changed = self._on_player_state
         self.player.on_now_playing = self._on_now_playing
@@ -463,8 +463,8 @@ class RadioPanel(scrolled.ScrolledPanel):
         self.controls.set_volume(new_percent)
         self._on_volume_changed(new_percent)
 
-    def _on_effects_changed(self, filter_chain: str) -> None:
-        self.player.apply_effects(filter_chain)
+    def _on_effects_changed(self, effect_stages: list) -> None:
+        self.player.apply_effects(effect_stages)
 
     def _on_record(self) -> None:
         """Record button acts on the station currently SELECTED in the tree —

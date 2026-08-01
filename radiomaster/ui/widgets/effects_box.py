@@ -7,7 +7,7 @@ from typing import Callable
 import wx
 
 from ...core.effects import DISPLAY_ORDER, EFFECT_SPECS
-from ...core.effects_store import EffectsPresetStore, EffectsStateStore, build_active_filter_chain
+from ...core.effects_store import EffectsPresetStore, EffectsStateStore, build_active_effect_chain
 from ...utils.accessibility import accessible_label
 
 
@@ -15,7 +15,7 @@ class EffectsBox(wx.StaticBoxSizer):
     """A StaticBoxSizer of CheckBox+Choice rows, one per effect, inside `parent`."""
 
     def __init__(self, parent: wx.Window, preset_store: EffectsPresetStore,
-                 state_store: EffectsStateStore, on_chain_changed: Callable[[str], None]):
+                 state_store: EffectsStateStore, on_chain_changed: Callable[[list], None]):
         self.box = wx.StaticBox(parent, label="Audio Effects")
         super().__init__(self.box, wx.VERTICAL)
         self.preset_store = preset_store
@@ -74,5 +74,5 @@ class EffectsBox(wx.StaticBoxSizer):
             self._apply()
 
     def _apply(self) -> None:
-        chain = build_active_filter_chain(self.preset_store, self.state_store)
+        chain = build_active_effect_chain(self.preset_store, self.state_store)
         self.on_chain_changed(chain)
