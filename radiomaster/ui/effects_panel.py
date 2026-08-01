@@ -30,12 +30,21 @@ class ParamPanel(wx.Panel):
 
         for param in params:
             unit_suffix = f" ({param.unit})" if param.unit else ""
+            accessible_name = f"{param.label}{unit_suffix}"
             # This wx.StaticText, immediately preceding ctrl in the same
-            # sizer, IS ctrl's accessible name via Windows' native "adjacent
-            # static labels its sibling" convention — no extra API call
-            # needed, and safe (see utils/accessibility.py for why the old
-            # set_accessible_name()-on-ctrl approach here used to crash).
-            label = wx.StaticText(self, label=f"{param.label}{unit_suffix}:")
+            # sizer, gives ctrl its accessible name via Windows' native
+            # "adjacent static labels its sibling" convention for SIMPLE
+            # controls (wx.Choice, wx.ListBox). It does NOT work for
+            # wx.SpinCtrl/wx.SpinCtrlDouble: those are composite controls
+            # (an outer Pane wrapping an inner Edit + Spinner sub-window),
+            # so the true adjacent sibling in Z-order is not this label and
+            # screen readers announce nothing. For those we additionally
+            # call ctrl.SetLabel() below, which sets the composite control's
+            # accessible Name directly without touching its displayed value
+            # (verified empirically: no crash, unlike wx.Accessible
+            # subclassing — see utils/accessibility.py — and unlike
+            # SetLabel() on a plain wx.TextCtrl, which asserts).
+            label = wx.StaticText(self, label=f"{accessible_name}:")
             value = values.get(param.key, param.default)
 
             if param.kind == "choice":
@@ -48,6 +57,7 @@ class ParamPanel(wx.Panel):
                     ctrl.Bind(wx.EVT_CHOICE, lambda e: on_change())
             elif param.kind == "int":
                 ctrl = wx.SpinCtrl(self, min=int(param.min), max=int(param.max), initial=int(value))
+                ctrl.SetLabel(accessible_name)
                 if on_change:
                     ctrl.Bind(wx.EVT_SPINCTRL, lambda e: on_change())
                     ctrl.Bind(wx.EVT_TEXT, lambda e: on_change())
@@ -57,6 +67,7 @@ class ParamPanel(wx.Panel):
                     inc=param.step or 0.1,
                 )
                 ctrl.SetDigits(3)
+                ctrl.SetLabel(accessible_name)
                 if on_change:
                     ctrl.Bind(wx.EVT_SPINCTRLDOUBLE, lambda e: on_change())
                     ctrl.Bind(wx.EVT_TEXT, lambda e: on_change())

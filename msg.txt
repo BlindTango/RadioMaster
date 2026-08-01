@@ -1,0 +1,15 @@
+Fix missing screen reader labels on Effects and Volume/Pan controls (v1.5.1)
+
+- Effects tab: wx.SpinCtrl/wx.SpinCtrlDouble parameter controls are
+  composite controls on Windows (outer Pane + inner Edit/Spinner), so the
+  existing preceding-StaticText-sibling naming convention never reached the
+  focusable inner control, leaving it with an empty accessible name.
+  Fixed by calling ctrl.SetLabel() directly on the SpinCtrl/SpinCtrlDouble,
+  verified via uiautomation to set the correct accessible name without
+  crashing or corrupting the displayed value.
+- Radio page: Volume/Pan sliders used wx.SL_LABELS, which continuously
+  overwrites the slider's accessible name with its current numeric value,
+  clobbering the descriptive name. Fixed by dropping SL_LABELS and using
+  the existing accessible_label() helper instead, with a plain visible
+  percent readout label to preserve the sighted-user value display.
+- Documented both findings in utils/accessibility.py for future reference.

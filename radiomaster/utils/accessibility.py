@@ -38,6 +38,25 @@ Verified directly: a zero-size (invisible, still Shown) wx.StaticText placed
 right before a wx.ListBox/wx.Choice makes uiautomation report the exact
 label text as that control's Name, with no visual change and no crash across
 repeated Tab-focus stress tests. accessible_label() below wraps that pattern.
+
+CAVEAT — wx.SpinCtrl / wx.SpinCtrlDouble: these render on Windows as a
+composite control (an outer Pane wrapping an inner Edit + Spinner/UpDown
+sub-window), so the preceding-sibling convention above does NOT reach the
+inner Edit that a screen reader actually focuses (verified: its Name stays
+empty either way). For these, call ctrl.SetLabel(name) directly on the
+SpinCtrl/SpinCtrlDouble itself — verified this sets the outer composite's
+accessible Name correctly, does NOT raise (SpinCtrl/SpinCtrlDouble aren't
+wx.TextCtrl subclasses, so they don't hit the TextCtrl SetLabel assertion),
+and does NOT alter the displayed numeric value.
+
+CAVEAT — wx.Slider with wx.SL_LABELS: this style makes wx continuously
+overwrite the Slider's own accessible Name with its current numeric value
+on every change (so any name set via SetLabel()/SetName() is immediately
+clobbered — verified). There is no known way to keep SL_LABELS' visible
+min/max/value ticks AND have a stable descriptive Name at the same time.
+The fix is to drop SL_LABELS and use accessible_label() before the slider
+instead (verified this produces a correct, stable Name); replace any lost
+visible value readout with a plain wx.StaticText updated on EVT_SLIDER.
 """
 
 from __future__ import annotations
