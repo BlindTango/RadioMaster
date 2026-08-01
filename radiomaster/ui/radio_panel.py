@@ -409,7 +409,14 @@ class RadioPanel(scrolled.ScrolledPanel):
         self.config.set("last_station_url", station.url)
 
     def _on_play_pause(self) -> None:
-        if self.player.state == PlayerState.STOPPED and self._selected_station:
+        # ERROR is included alongside STOPPED here: once a stream drops for
+        # good (ffmpeg's own reconnect attempts exhausted) _fail() leaves the
+        # player in ERROR state, and without this the Play/Pause button (and
+        # its hotkey) silently did nothing from then on — looked exactly like
+        # "the stream stopped and won't play again" even with a fine network
+        # connection, since re-selecting the station in the tree was the only
+        # thing that actually worked.
+        if self.player.state in (PlayerState.STOPPED, PlayerState.ERROR) and self._selected_station:
             self._play_station(self._selected_station)
         elif self.player.state == PlayerState.PAUSED:
             self.player.resume()
