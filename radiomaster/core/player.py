@@ -567,6 +567,18 @@ class Player:
                     break
                 if buf is not None:
                     buf.write(chunk)
+                    # A live radio stream is naturally paced near real-time by
+                    # the network, but decoding an on-demand file (a podcast
+                    # episode) has nothing to pace it -- ffmpeg can finish
+                    # decoding an hour-long episode in seconds. Without this,
+                    # the buffer fills to capacity almost instantly and its
+                    # overflow policy (drop oldest, meant to keep a live
+                    # stream at the live edge) starts continuously discarding
+                    # audio nearly as fast as it's decoded, which is audible
+                    # as constant fast-forwarding rather than normal playback.
+                    while (buf.fill_level > 0.9 and not self._stop_event.is_set()
+                           and generation == self._decode_generation and proc.poll() is None):
+                        time.sleep(0.05)
                 if self.ad_detection_enabled:
                     self._feed_ad_detection(chunk, generation)
         except (OSError, ValueError):
