@@ -23,6 +23,7 @@ from ..core.effects_store import EffectsPresetStore, EffectsStateStore
 from ..core.favourites import FavouritesStore
 from ..core.hotkeys import GlobalHotkeyManager
 from ..core.player import Player
+from ..core.podcast_subscriptions import PodcastSubscriptionsStore
 from ..core.recorder import StationRecordingSession
 from ..core.scheduler import RecordingScheduler, Schedule, ScheduleStore, is_nth_weekday_match
 from ..core.station_api import Station, StationAPI
@@ -35,6 +36,7 @@ from .about_dialog import AboutDialog
 from .effects_panel import EffectsPanel
 from .favourites_panel import FavouritesPanel
 from .help_dialog import HelpDialog
+from .podcast_panel import PodcastPanel
 from .radio_panel import RadioPanel
 from .scheduler_panel import SchedulerPanel
 from .settings_panel import SettingsPanel
@@ -58,6 +60,7 @@ class MainFrame(wx.Frame):
         )
         self.favourites = FavouritesStore()
         self.custom_stations = CustomStationsStore()
+        self.podcast_subscriptions = PodcastSubscriptionsStore()
         self.player = Player(
             buffer_seconds=self.config.get("buffer_seconds", 30),
             output_device=self.config.get("output_device"),
@@ -105,12 +108,23 @@ class MainFrame(wx.Frame):
             self.station_updater, self.station_update_scheduler, self.station_db,
             on_station_db_updated=self.radio_panel.refresh_after_station_update,
         )
+        self.podcast_panel = PodcastPanel(
+            self.listbook, self.config, self.podcast_subscriptions, self.player,
+        )
+        self.podcast_panel.set_proxies(self._proxies())
 
         self.listbook.AddPage(self.radio_panel, "📻 Radio")
         self.listbook.AddPage(self.favourites_panel, "⭐ Favourites")
         self.listbook.AddPage(self.scheduler_panel, "📅 Scheduler")
         self.listbook.AddPage(self.effects_panel, "🎚 Effects")
+        self.listbook.AddPage(self.podcast_panel, "🎙 Podcasts")
         self.listbook.AddPage(self.settings_panel, "⚙ Settings")
+
+        # Radio is the default first-shown tab, so it needs to be the one
+        # actually holding the shared Player's (single-slot) callbacks
+        # initially — PodcastPanel claims them for itself only while its own
+        # tab is the active one (see _on_page_changed below).
+        self.radio_panel.bind_player_callbacks()
 
         self.listbook.Bind(wx.EVT_NOTEBOOK_PAGE_CHANGED, self._on_page_changed)
         self.Bind(wx.EVT_CLOSE, self._on_close)
@@ -249,6 +263,10 @@ class MainFrame(wx.Frame):
             self.favourites_panel.refresh()
         elif new_page is self.scheduler_panel:
             self.scheduler_panel.refresh()
+        elif new_page is self.podcast_panel and old_page is not self.podcast_panel:
+            self.podcast_panel.bind_player_callbacks()
+        elif old_page is self.podcast_panel and new_page is not self.podcast_panel:
+            self.radio_panel.bind_player_callbacks()
         event.Skip()
 
     def _on_settings_applied(self) -> None:
@@ -256,6 +274,9 @@ class MainFrame(wx.Frame):
         self.player.output_device = self.config.get("output_device")
         self.player.proxies = self._proxies()
         self.station_api.set_proxies(self._proxies())
+        self.podcast_panel.set_proxies(self._proxies())
+        self.podcast_panel.set_podcastindex_credentials(
+            self.config.get("podcastindex_api_key"), self.config.get("podcastindex_api_secret"))
         self.player.set_fade(self.config.get("fade_enabled", False), self.config.get("fade_ms", 800) / 1000)
         self.player.set_ad_detection_enabled(self.config.get("ad_detection_enabled", False))
         self.player.set_ad_auto_mute_enabled(self.config.get("ad_auto_mute_enabled", True))

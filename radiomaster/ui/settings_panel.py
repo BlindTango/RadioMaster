@@ -86,6 +86,12 @@ class SettingsPanel(scrolled.ScrolledPanel):
         fpcalc_status = "found" if _fpcalc_available() else "not found (recording will skip fingerprint ID)"
         self.acoustid_status_label = wx.StaticText(self, label=f"fpcalc: {fpcalc_status}")
 
+        accessible_label(self, "Podcast Index API key")
+        self.podcastindex_key_ctrl = wx.TextCtrl(self, value=config.get("podcastindex_api_key") or "")
+        self.podcastindex_key_ctrl.SetHint("Optional — free key from podcastindex.org, adds a second podcast search directory")
+        accessible_label(self, "Podcast Index API secret")
+        self.podcastindex_secret_ctrl = wx.TextCtrl(self, value=config.get("podcastindex_api_secret") or "", style=wx.TE_PASSWORD)
+
         accessible_label(self, "Default recording format")
         self.format_choice = wx.Choice(self, choices=FORMATS)
         current_fmt = config.get("recording_format", "mp3")
@@ -164,6 +170,8 @@ class SettingsPanel(scrolled.ScrolledPanel):
         outer.Add(self.musicbrainz_check, 0, wx.LEFT, 10)
         outer.Add(row("Ac&oustID API key:", self.acoustid_key_ctrl), 0, wx.EXPAND | wx.ALL, 6)
         outer.Add(self.acoustid_status_label, 0, wx.LEFT, 10)
+        outer.Add(row("Podcast &Index API key:", self.podcastindex_key_ctrl), 0, wx.EXPAND | wx.ALL, 6)
+        outer.Add(row("Podcast Index API &secret:", self.podcastindex_secret_ctrl), 0, wx.EXPAND | wx.ALL, 6)
         outer.Add(row("Recording &format:", self.format_choice), 0, wx.EXPAND | wx.ALL, 6)
         outer.Add(row("&Min. track length (seconds):", self.min_track_seconds_ctrl), 0, wx.EXPAND | wx.ALL, 6)
         outer.Add(row("&Theme:", self.theme_choice), 0, wx.EXPAND | wx.ALL, 6)
@@ -280,6 +288,8 @@ class SettingsPanel(scrolled.ScrolledPanel):
         self.config.set("metadata_deezer_enabled", self.deezer_check.GetValue(), save=False)
         self.config.set("metadata_musicbrainz_enabled", self.musicbrainz_check.GetValue(), save=False)
         self.config.set("acoustid_api_key", self.acoustid_key_ctrl.GetValue().strip() or None, save=False)
+        self.config.set("podcastindex_api_key", self.podcastindex_key_ctrl.GetValue().strip() or None, save=False)
+        self.config.set("podcastindex_api_secret", self.podcastindex_secret_ctrl.GetValue().strip() or None, save=False)
         self.config.set("recording_format", FORMATS[self.format_choice.GetSelection()], save=False)
         self.config.set("min_track_seconds", self.min_track_seconds_ctrl.GetValue(), save=False)
         self.config.set("theme", THEMES[self.theme_choice.GetSelection()], save=False)

@@ -142,6 +142,13 @@ class Player:
         self.on_stream_info: Optional[Callable[[StreamInfo], None]] = None
         self.on_error: Optional[Callable[[str], None]] = None
         self.on_ad_detected: Optional[Callable[[bool], None]] = None
+        # Fired instead of on_error when a stream started with expect_eof=True
+        # (an on-demand podcast episode, not a live station) reaches a clean
+        # end-of-file -- live radio is never expected to end on its own, so
+        # that path still treats any EOF as a dropped connection.
+        self.on_finished: Optional[Callable[[], None]] = None
+        self._expect_eof = False
+        self._rate = 1.0
 
     # ---- public controls ---------------------------------------------------
 
@@ -149,13 +156,23 @@ class Player:
         self.fade_enabled = enabled
         self.fade_seconds = max(0.05, seconds)
 
-    def start(self, url: str, station_name: str = "") -> None:
+    def start(self, url: str, station_name: str = "", expect_eof: bool = False,
+               rate: float = 1.0) -> None:
         """Switching stations while one is actually PLAYING goes through the
         gapless path (old keeps playing until the new one is ready, then
         fades out — see _switch_gapless); anything else (nothing playing
         yet, still connecting, paused, errored) has no audible old station
-        worth preserving, so it just does the original stop-then-start."""
+        worth preserving, so it just does the original stop-then-start.
+
+        expect_eof=True is for on-demand media (a podcast episode) that is
+        SUPPOSED to end on its own -- a clean EOF fires on_finished instead
+        of being treated as a dropped connection (see _read_loop). rate is
+        a pitch-preserving playback speed multiplier (1.0 = normal); it only
+        takes effect from the start of THIS call, not for the segment
+        already playing."""
         self.station_name = station_name
+        self._expect_eof = expect_eof
+        self._rate = max(0.5, min(3.0, rate))
         if self.state == PlayerState.PLAYING and self._proc is not None and self._out_stream is not None:
             self._switch_gapless(url)
             return
@@ -307,7 +324,14 @@ class Player:
         afterwards, directly to the decoded PCM, by the DSP effect chain in
         _open_output_stream()'s callback (see apply_effects()), so this
         command never needs an `-af` chain and never needs restarting when
-        an effect changes."""
+        an effect changes.
+
+        The one exception is self._rate (podcast playback speed): that's a
+        pitch-preserving time-stretch, which the numpy DSP chain has no way
+        to do, so it's the sole thing still applied via an ffmpeg `-af`
+        filter, built fresh for each decode -- ffmpeg's atempo filter is only
+        valid over 0.5-2.0 per instance, so a larger factor is split across
+        two chained atempo filters instead of one out-of-range value."""
         ffmpeg = self._ffmpeg or find_ffmpeg()
         if not ffmpeg:
             self._fail("FFmpeg was not found. Place ffmpeg.exe in resources/ffmpeg/ or install it on PATH.")
@@ -318,6 +342,13 @@ class Player:
             "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
             "-i", url,
             "-vn",
+        ]
+        if abs(self._rate - 1.0) > 1e-3:
+            if self._rate > 2.0:
+                cmd += ["-af", f"atempo=2.0,atempo={self._rate / 2.0}"]
+            else:
+                cmd += ["-af", f"atempo={self._rate}"]
+        cmd += [
             "-f", "s16le", "-acodec", "pcm_s16le",
             "-ac", str(CHANNELS), "-ar", str(SAMPLE_RATE),
             "pipe:1",
@@ -533,6 +564,14 @@ class Player:
             # don't report a false error for it.
             if (not self._stop_event.is_set() and self.state != PlayerState.ERROR
                     and generation == self._decode_generation):
+                if self._expect_eof:
+                    try:
+                        returncode = proc.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        returncode = None
+                    if returncode in (0, None):
+                        self._finish()
+                        return
                 threading.Thread(
                     target=log_if_geo_restricted, args=(self.station_name, self.url, self.proxies),
                     daemon=True).start()
@@ -677,3 +716,11 @@ class Player:
         self._set_state(PlayerState.ERROR)
         if self.on_error:
             self.on_error(message)
+
+    def _finish(self) -> None:
+        """A stream started with expect_eof=True (a podcast episode) reached
+        a clean end -- distinct from _fail() so the caller can tell "the
+        episode ended normally, play the next one" apart from a real error."""
+        self._set_state(PlayerState.STOPPED)
+        if self.on_finished:
+            self.on_finished()

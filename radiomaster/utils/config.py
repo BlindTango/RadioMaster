@@ -36,6 +36,11 @@ _DEFAULTS = {
     "mute_playback_while_recording": False,
     "ad_detection_enabled": False,
     "ad_auto_mute_enabled": True,
+    "podcastindex_api_key": None,
+    "podcastindex_api_secret": None,
+    "podcast_volume": 1.0,
+    "podcast_rate": 1.0,
+    "podcast_pan": 0.5,
     "hotkeys": {
         "play_pause": "Ctrl+Alt+P",
         "stop": "Ctrl+Alt+S",

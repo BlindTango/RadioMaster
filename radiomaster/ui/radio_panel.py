@@ -283,17 +283,26 @@ class RadioPanel(scrolled.ScrolledPanel):
 
         self.player.apply_effects(build_active_effect_chain(effects_presets, effects_state))
 
-        self.player.on_state_changed = self._on_player_state
-        self.player.on_now_playing = self._on_now_playing
-        self.player.on_stream_info = self._on_stream_info
-        self.player.on_error = self._on_player_error
-        self.player.on_ad_detected = self._on_ad_detected
+        self.bind_player_callbacks()
 
         self._status_timer = wx.Timer(self)
         self.Bind(wx.EVT_TIMER, self._on_status_tick, self._status_timer)
         self._status_timer.Start(1000)
 
         self._load_stations()
+
+    def bind_player_callbacks(self) -> None:
+        """(Re)claims the shared Player's single-slot event callbacks for
+        this panel. The Podcast panel points them at itself while its tab is
+        active (playing an on-demand episode instead of a live station) and
+        MainFrame calls this again on switching back to the Radio tab so its
+        own Play/Pause state and status text stay in sync — see
+        MainFrame._on_page_changed."""
+        self.player.on_state_changed = self._on_player_state
+        self.player.on_now_playing = self._on_now_playing
+        self.player.on_stream_info = self._on_stream_info
+        self.player.on_error = self._on_player_error
+        self.player.on_ad_detected = self._on_ad_detected
 
     # Cap on what this page ever asks the frame to grow to, regardless of
     # how much content ends up stacked on it (currently ~850px worth) — a
