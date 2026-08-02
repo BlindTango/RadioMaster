@@ -75,6 +75,10 @@ def recordings_dir(*parts: str) -> str:
     return data_dir("recordings", *parts)
 
 
+def podcasts_dir(*parts: str) -> str:
+    return data_dir("podcasts", *parts)
+
+
 def resources_dir(*parts: str) -> str:
     return os.path.join(app_dir(), "radiomaster", "resources", *parts)
 

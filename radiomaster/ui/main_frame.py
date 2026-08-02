@@ -41,6 +41,7 @@ from ..core.station_db import StationDB
 from ..core.station_update_scheduler import StationUpdateScheduler
 from ..core.station_updater import StationUpdater, UpdateResult
 from ..utils.config import Config
+from ..utils.paths import podcasts_dir, recordings_dir
 from ..utils.wx_safe import call_after_safe
 from .about_dialog import AboutDialog
 from .effects_dialog import EffectsSettingsDialog
@@ -194,6 +195,11 @@ class MainFrame(wx.Frame):
         self.Bind(wx.EVT_MENU, self._on_add_feed, add_feed_item)
         file_menu.AppendSubMenu(podcasts_submenu, "&Podcasts")
         file_menu.AppendSeparator()
+        open_recordings_item = file_menu.Append(wx.ID_ANY, "Open &Recording Folder", "Open the folder where recordings are saved")
+        self.Bind(wx.EVT_MENU, self._on_open_recording_folder, open_recordings_item)
+        open_podcasts_item = file_menu.Append(wx.ID_ANY, "Open Po&dcast Folder", "Open the folder used for podcast data")
+        self.Bind(wx.EVT_MENU, self._on_open_podcast_folder, open_podcasts_item)
+        file_menu.AppendSeparator()
         exit_item = file_menu.Append(wx.ID_EXIT, "E&xit\tAlt+F4", "Close RadioMaster")
         self.Bind(wx.EVT_MENU, lambda e: self.Close(), exit_item)
         menu_bar.Append(file_menu, "&File")
@@ -279,7 +285,6 @@ class MainFrame(wx.Frame):
     def _apply_effects_chain(self) -> None:
         chain = build_active_effect_chain(self.effects_presets, self.effects_state)
         self.player.apply_effects(chain)
-        self.radio_panel.effects_box.sync_from_store()
 
     def _on_import_opml(self, event: wx.CommandEvent) -> None:
         with wx.FileDialog(
@@ -313,6 +318,12 @@ class MainFrame(wx.Frame):
             self.podcast_panel.add_feed_by_url(dlg.GetValue())
         dlg.Destroy()
 
+    def _on_open_recording_folder(self, event: wx.CommandEvent) -> None:
+        os.startfile(recordings_dir())
+
+    def _on_open_podcast_folder(self, event: wx.CommandEvent) -> None:
+        os.startfile(podcasts_dir())
+
     def _open_effects_settings(self, effect_id: Optional[str] = None) -> None:
         dlg = EffectsSettingsDialog(
             self, self.effects_presets, self.effects_state, self.player,
@@ -320,7 +331,6 @@ class MainFrame(wx.Frame):
         )
         dlg.ShowModal()
         dlg.Destroy()
-        self.radio_panel.effects_box.sync_from_store()
 
     def _on_open_settings(self, event) -> None:
         dlg = SettingsDialog(

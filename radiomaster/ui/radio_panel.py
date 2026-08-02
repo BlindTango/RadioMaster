@@ -12,7 +12,6 @@ import wx
 import wx.lib.scrolledpanel as scrolled
 
 from ..core.custom_stations import CustomStationsStore
-from ..core.effects import DISPLAY_ORDER, EFFECT_SPECS
 from ..core.effects_store import EffectsPresetStore, EffectsStateStore, build_active_effect_chain
 from ..core.favourites import FavouritesStore
 from ..core.player import Player, PlayerState, StreamInfo
@@ -22,7 +21,6 @@ from ..core.station_db import StationDB
 from ..core.station_updater import StationUpdater
 from ..utils.config import Config
 from ..utils.wx_safe import call_after_safe
-from .widgets.effects_box import EffectsBox
 from .widgets.now_playing import NowPlayingPanel, format_status
 from .widgets.player_controls import PlayerControls
 from .widgets.recordings_list import RecordingsList
@@ -146,8 +144,8 @@ class AddCustomStationDialog(wx.Dialog):
 
 class RadioPanel(scrolled.ScrolledPanel):
     """A ScrolledPanel, not a plain Panel: this page stacks a LOT of rows
-    (search, station tree, action buttons, now-playing, player controls, 9
-    effect checkboxes, active recordings) — on a window/screen too short to
+    (search, station tree, action buttons, now-playing, player controls,
+    active recordings) — on a window/screen too short to
     fit all of it, a plain Panel's sizer doesn't just look cramped, it
     forcibly compresses rows below their own declared MinSize, in the worst
     case straight to 0 and the control vanishes entirely (confirmed:
@@ -222,7 +220,6 @@ class RadioPanel(scrolled.ScrolledPanel):
         self.add_custom_btn = wx.Button(self, label="&Add Custom Station")
         self.favourite_btn = wx.Button(self, label="Save to &Favourites")
 
-        self.effects_box = EffectsBox(self, effects_presets, effects_state, self._on_effects_changed)
         self.recordings_list = RecordingsList(self)
         # 70px used to be this widget's whole budget, but that's the label
         # + the actual list + the Stop button all sharing it — confirmed
@@ -246,7 +243,6 @@ class RadioPanel(scrolled.ScrolledPanel):
         outer.Add(action_row, 0, wx.EXPAND | wx.ALL, 6)
         outer.Add(self.now_playing, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 6)
         outer.Add(self.controls, 0, wx.EXPAND | wx.ALL, 6)
-        outer.Add(self.effects_box, 0, wx.EXPAND | wx.ALL, 6)
         outer.Add(self.recordings_list, 0, wx.EXPAND | wx.ALL, 6)
         self.SetSizer(outer)
         # SetupScrolling() (not raw SetScrollRate()+FitInside()) is what
@@ -471,9 +467,6 @@ class RadioPanel(scrolled.ScrolledPanel):
         new_percent = max(0, min(100, self.controls.volume_slider.GetValue() + delta_percent))
         self.controls.set_volume(new_percent)
         self._on_volume_changed(new_percent)
-
-    def _on_effects_changed(self, effect_stages: list) -> None:
-        self.player.apply_effects(effect_stages)
 
     def _on_record(self) -> None:
         """Record button acts on the station currently SELECTED in the tree —
