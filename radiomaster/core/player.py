@@ -545,7 +545,13 @@ class Player:
                     samples[:, 1] *= right_gain
                 elif gain != 1.0:
                     samples *= gain
-            outdata[:] = samples.astype(np.int16)
+            # +1.0 scaled by 32768.0 lands one past int16's actual max
+            # (32767) -- left uncaught, that overshoot wraps around to
+            # -32768 on cast, a full-scale polarity flip heard as a click.
+            # Loudness-normalized audio (most podcasts) hits that peak
+            # constantly, so this clip is what stands between "clean" and
+            # "crackling".
+            outdata[:] = np.clip(samples, -32768, 32767).astype(np.int16)
 
         with self._out_stream_lock:
             if generation is not None and (generation != self._decode_generation or self._stop_event.is_set()):
