@@ -24,6 +24,10 @@ a = Analysis(
         ('radiomaster/resources/ffmpeg/FFMPEG-LICENSE.txt', 'radiomaster/resources/ffmpeg'),
         ('radiomaster/resources/fpcalc/fpcalc.exe', 'radiomaster/resources/fpcalc'),
         ('radiomaster/resources/fpcalc/CHROMAPRINT-LICENSE.md', 'radiomaster/resources/fpcalc'),
+        ('radiomaster/resources/bass/bass.dll', 'radiomaster/resources/bass'),
+        ('radiomaster/resources/bass/bass_fx.dll', 'radiomaster/resources/bass'),
+        ('radiomaster/resources/bass/bassmix.dll', 'radiomaster/resources/bass'),
+        ('radiomaster/resources/bass/BASS-LICENSE.txt', 'radiomaster/resources/bass'),
         (os.path.join(_pycountry_dir, 'databases'), 'pycountry/databases'),
     ],
     hiddenimports=[

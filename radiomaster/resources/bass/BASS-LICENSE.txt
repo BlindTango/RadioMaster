@@ -1,0 +1,13 @@
+BASS / BASS_FX / BASSmix audio libraries (c) Ian Luck / un4seen developments.
+
+These DLLs are bundled with RadioMaster for decoding and mixing internet
+audio streams. BASS is free for use in non-commercial/freeware software;
+RadioMaster is distributed free of charge. Review the current license terms
+before any commercial redistribution:
+
+  https://www.un4seen.com/bass.html#license
+  https://www.un4seen.com/
+
+BASS_FX (tempo/pitch shifting) and BASSmix (stream mixing/resampling) are
+official BASS add-ons from the same source, distributed under compatible
+terms.

@@ -283,3 +283,23 @@ class SchedulerPanel(wx.Panel):
             self.store.update(sched)
             self.scheduler.reload()
             self.refresh()
+
+
+class SchedulerDialog(wx.Dialog):
+    """Hosts a SchedulerPanel inside a dialog reached from Tools > Recording
+    Scheduler..., rather than a permanent notebook tab."""
+
+    def __init__(self, parent, favourites: FavouritesStore, custom_stations: CustomStationsStore,
+                 store: ScheduleStore, scheduler: RecordingScheduler):
+        super().__init__(parent, title="Recording Scheduler", size=(820, 560),
+                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        self.panel = SchedulerPanel(self, favourites, custom_stations, store, scheduler)
+        close_btn = wx.Button(self, wx.ID_CLOSE, "&Close")
+
+        outer = wx.BoxSizer(wx.VERTICAL)
+        outer.Add(self.panel, 1, wx.EXPAND)
+        outer.Add(close_btn, 0, wx.ALIGN_RIGHT | wx.ALL, 8)
+        self.SetSizer(outer)
+
+        close_btn.Bind(wx.EVT_BUTTON, lambda e: self.EndModal(wx.ID_CLOSE))
+        self.Bind(wx.EVT_CLOSE, lambda e: self.EndModal(wx.ID_CLOSE))

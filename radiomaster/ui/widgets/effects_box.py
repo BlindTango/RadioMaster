@@ -58,9 +58,18 @@ class EffectsBox(wx.StaticBoxSizer):
             self.state_store.set_selected_preset(effect_id, names[0])
 
     def refresh_all_presets(self) -> None:
-        """Call after presets are edited/added/removed elsewhere (the Effects settings page)."""
+        """Call after presets are edited/added/removed elsewhere (the Effects settings dialog)."""
         for effect_id, combo in self.combos.items():
             self._refresh_presets(effect_id, combo)
+
+    def sync_from_store(self) -> None:
+        """Refresh both the on/off checkboxes and the preset selections from
+        the stores -- call after another UI surface (the Effects menu)
+        changes enabled state or preset selection, so this box doesn't go
+        stale while its own controls weren't the ones that changed it."""
+        for effect_id, check in self.checkboxes.items():
+            check.SetValue(self.state_store.is_enabled(effect_id))
+        self.refresh_all_presets()
 
     def _on_toggle(self, effect_id: str) -> None:
         self.state_store.set_enabled(effect_id, self.checkboxes[effect_id].GetValue())

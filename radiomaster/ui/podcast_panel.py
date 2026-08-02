@@ -13,16 +13,16 @@ from __future__ import annotations
 
 import logging
 import threading
-import time
 from typing import Optional
 
 import wx
 import wx.lib.scrolledpanel as scrolled
 
+from ..core.opml import OPMLError, parse_opml, write_opml
 from ..core.player import Player, PlayerState
 from ..core.podcast_api import (
     Episode, ITunesDirectory, PodcastAPIError, PodcastDirectory, PodcastIndexDirectory,
-    PodcastResult, fetch_episodes, search_all,
+    PodcastResult, fetch_episodes, fetch_feed_metadata, search_all,
 )
 from ..core.podcast_subscriptions import PodcastSubscriptionsStore
 from ..utils.accessibility import accessible_label
@@ -59,14 +59,6 @@ class PodcastPanel(scrolled.ScrolledPanel):
         self._playing_podcast: Optional[PodcastResult] = None
         self._playing_episodes: list[Episode] = []
         self._playing_index: Optional[int] = None
-        # Estimated source-file position of the current playback segment,
-        # used only so a live rate change (see _on_rate_committed) can
-        # restart ffmpeg from roughly where it left off instead of from 0 --
-        # there's no real seek bar/scrubbing feature, this is purely internal
-        # bookkeeping for that one purpose.
-        self._segment_position_seconds = 0.0
-        self._segment_started_wall: Optional[float] = None
-        self._segment_rate = 1.0
         self._search_seq = 0
         self._episodes_seq = 0
 
@@ -278,6 +270,70 @@ class PodcastPanel(scrolled.ScrolledPanel):
             self.description_ctrl.ChangeValue("")
         self.set_status(f"Status: Unsubscribed from '{podcast.title}'")
 
+    # ---- add feed / OPML import-export --------------------------------------
+
+    def add_feed_by_url(self, feed_url: str) -> None:
+        """Subscribes to a feed the user already has the URL for, bypassing
+        directory search entirely -- for feeds that don't show up (or
+        shouldn't show up) in iTunes/Podcast Index search results."""
+        feed_url = feed_url.strip()
+        if not feed_url:
+            return
+        if self.subscriptions.contains(feed_url):
+            wx.MessageBox("Already subscribed to that feed.", "Already Subscribed", wx.OK | wx.ICON_INFORMATION)
+            return
+        self.set_status("Status: Adding podcast feed...")
+
+        def worker():
+            try:
+                result = fetch_feed_metadata(feed_url, proxies=self._proxies)
+            except PodcastAPIError as exc:
+                call_after_safe(self, wx.MessageBox, f"Could not add feed: {exc}", "Add Feed Failed",
+                                 wx.OK | wx.ICON_ERROR)
+                call_after_safe(self, self.set_status, "Status: Add feed failed")
+                return
+            call_after_safe(self, self._finish_add_feed, result)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _finish_add_feed(self, result: PodcastResult) -> None:
+        self.subscriptions.subscribe(result)
+        self._refresh_subscriptions()
+        self.set_status(f"Status: Subscribed to '{result.title}'")
+
+    def import_opml(self, path: str) -> None:
+        try:
+            feeds = parse_opml(path)
+        except OPMLError as exc:
+            wx.MessageBox(str(exc), "Import Failed", wx.OK | wx.ICON_ERROR)
+            return
+        added = 0
+        for title, feed_url in feeds:
+            if self.subscriptions.contains(feed_url):
+                continue
+            self.subscriptions.subscribe(PodcastResult(feed_url=feed_url, title=title, directory="Imported"))
+            added += 1
+        self._refresh_subscriptions()
+        skipped = len(feeds) - added
+        message = f"Imported {added} podcast(s)."
+        if skipped:
+            message += f" Skipped {skipped} already-subscribed feed(s)."
+        wx.MessageBox(message, "Import Complete", wx.OK | wx.ICON_INFORMATION)
+        self.set_status(f"Status: {message}")
+
+    def export_opml(self, path: str) -> None:
+        podcasts = self.subscriptions.all()
+        if not podcasts:
+            wx.MessageBox("There are no podcast subscriptions to export.", "Nothing To Export",
+                          wx.OK | wx.ICON_INFORMATION)
+            return
+        try:
+            write_opml(path, podcasts)
+        except OPMLError as exc:
+            wx.MessageBox(str(exc), "Export Failed", wx.OK | wx.ICON_ERROR)
+            return
+        self.set_status(f"Status: Exported {len(podcasts)} podcast(s) to '{path}'")
+
     def _on_subs_sel_changed(self, event: wx.ListEvent) -> None:
         podcast = self._selected_subscription()
         if not podcast:
@@ -348,25 +404,9 @@ class PodcastPanel(scrolled.ScrolledPanel):
         podcast_title = self._playing_podcast.title if self._playing_podcast else ""
         self.player.start(episode.audio_url, station_name=podcast_title, expect_eof=True,
                            rate=rate, seek_seconds=seek_seconds)
-        self._segment_position_seconds = seek_seconds
-        self._segment_started_wall = time.monotonic()
-        self._segment_rate = rate
         self.now_playing.set_station(podcast_title)
         self.now_playing.set_now_playing(episode.title)
         self.set_status(f"Status: Playing '{episode.title}'")
-
-    def _estimate_position_seconds(self) -> float:
-        """Best-effort guess at how far into the current episode playback
-        actually is, purely so a live rate change (_on_rate_committed) can
-        resume close to the same spot instead of restarting from 0 --
-        atempo means N real seconds of playback consume N*rate seconds of
-        source material, so that factor has to be applied here too."""
-        if self._segment_started_wall is None:
-            return self._segment_position_seconds
-        if self.player.state == PlayerState.PAUSED:
-            return self._segment_position_seconds
-        elapsed_wall = time.monotonic() - self._segment_started_wall
-        return self._segment_position_seconds + elapsed_wall * self._segment_rate
 
     def _on_play(self) -> None:
         if self.player.state == PlayerState.PLAYING:
@@ -413,19 +453,14 @@ class PodcastPanel(scrolled.ScrolledPanel):
 
     def _on_rate_committed(self, rate: float) -> None:
         """The Rate slider settled on a new value (drag released, or a
-        keyboard step) -- if an episode is actually playing right now,
-        restart its decode at the new rate from roughly the current
-        position (see player.py's seek_seconds); ffmpeg has no way to
-        change atempo on an already-running process, so a brief restart is
-        the only way to make this take effect immediately rather than
-        leaving the slider looking broken until the next episode."""
+        keyboard step) -- applied live to the already-running BASS_FX tempo
+        stream (see Player.set_rate()). No restart, no reconnect, no
+        position estimate needed -- the old ffmpeg-based player had no way
+        to change atempo on an already-running process, so a brief restart
+        used to be the only way to make a rate change take effect."""
         if self._playing_index is not None and self.player.state in (
                 PlayerState.PLAYING, PlayerState.CONNECTING, PlayerState.PAUSED):
-            was_paused = self.player.state == PlayerState.PAUSED
-            position = self._estimate_position_seconds()
-            self._play_current(seek_seconds=position)
-            if was_paused:
-                self.player.pause()
+            self.player.set_rate(rate)
 
     def _on_rate_changed(self, rate: float) -> None:
         self.config.set("podcast_rate", rate)

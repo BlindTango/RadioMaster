@@ -1,14 +1,17 @@
-"""Custom FFmpeg-based streaming audio player (no VLC dependency).
+"""BASS-based streaming audio player (no VLC dependency).
 
-Pipeline: HTTP stream -> ffmpeg subprocess (decode to raw PCM) -> ring buffer
--> sounddevice output callback. A parallel ICY metadata poller extracts the
-current track title.
+Pipeline: HTTP stream -> BASS decode-only channel (network fetch + format
+decode + per-source BASSmix normalization to a fixed rate/channel count) ->
+ring buffer -> sounddevice output callback. A parallel ICY metadata poller
+extracts the current track title. See core.bass_engine for the ctypes
+wrapper this replaced an ffmpeg subprocess with.
 
 Recording is entirely independent of this class — see
-core.recorder.StationRecordingSession, which opens its own headless decode
-pipeline per station. That means any number of stations can record
-concurrently while this Player plays a completely different (or the same)
-station through the speakers.
+core.recorder.StationRecordingSession, which still uses its own headless
+ffmpeg decode pipeline per station (recording never exhibited the
+real-time-playback issues BASS fixes here, so it was left as-is). That
+means any number of stations can record concurrently while this Player
+plays a completely different (or the same) station through the speakers.
 """
 
 from __future__ import annotations
@@ -25,8 +28,9 @@ from typing import Callable, Optional
 import sounddevice as sd
 import numpy as np
 
-from ..utils.ffmpeg import find_ffmpeg, find_ffprobe
+from ..utils.ffmpeg import find_ffprobe
 from .ad_detection import AdFingerprintStore, SilenceGapDetector, compute_fingerprint, is_ad_title
+from .bass_engine import BassDecodeChannel, BassError
 from .dsp import EffectChain
 from .effects import CHAIN_ORDER, EFFECT_SPECS
 from .geo_check import log_if_geo_restricted
@@ -101,7 +105,7 @@ class Player:
         self._fade_gain = 1.0
 
         self._buffer: Optional[StreamBuffer] = None
-        self._proc: Optional[subprocess.Popen] = None
+        self._channel: Optional[BassDecodeChannel] = None
         self._out_stream: Optional[sd.OutputStream] = None
         # Guards every read/construct/start/stop/close/assign touching
         # _out_stream. Without it, stop() and the priming thread opening the
@@ -168,19 +172,18 @@ class Player:
         expect_eof=True is for on-demand media (a podcast episode) that is
         SUPPOSED to end on its own -- a clean EOF fires on_finished instead
         of being treated as a dropped connection (see _read_loop). rate is
-        a pitch-preserving playback speed multiplier (1.0 = normal); changing
-        it mid-episode means calling start() again on the same url, so
-        seek_seconds lets the caller resume from roughly where the previous
-        segment left off instead of restarting from 0 (there's no frame-
-        accurate position tracking here -- callers estimate elapsed time
-        themselves and pass their best guess; ffmpeg's -ss input seek is not
-        perfectly sample-accurate on all formats, but close enough for a
-        rate change to not feel like a restart)."""
+        a pitch-preserving playback speed multiplier (1.0 = normal) applied
+        via a BASS_FX tempo stream (see bass_engine.BassDecodeChannel),
+        which only wraps on-demand (expect_eof=True) sources. seek_seconds
+        seeks the decode channel directly to that position before playback
+        begins -- for rate/seek changes to an ALREADY-PLAYING episode
+        without restarting the connection, use set_rate()/seek() instead of
+        calling start() again."""
         self.station_name = station_name
         self._expect_eof = expect_eof
         self._rate = max(0.5, min(3.0, rate))
         self._seek_seconds = max(0.0, seek_seconds)
-        if self.state == PlayerState.PLAYING and self._proc is not None and self._out_stream is not None:
+        if self.state == PlayerState.PLAYING and self._channel is not None and self._out_stream is not None:
             self._switch_gapless(url)
             return
         self._cold_start(url)
@@ -190,8 +193,8 @@ class Player:
         self._decode_generation += 1
         generation = self._decode_generation
 
-        new_proc = self._spawn_decode_process(url)
-        if new_proc is None:
+        new_channel = self._spawn_decode_channel(url)
+        if new_channel is None:
             return
 
         # Metadata/probe loops are independent of the audio path — safe (and
@@ -204,9 +207,9 @@ class Player:
         self._probe_thread.start()
 
         threading.Thread(
-            target=self._prebuffer_then_crossfade, args=(new_proc, generation), daemon=True).start()
+            target=self._prebuffer_then_crossfade, args=(new_channel, generation), daemon=True).start()
 
-    def _prebuffer_then_crossfade(self, new_proc: subprocess.Popen, generation: int,
+    def _prebuffer_then_crossfade(self, new_channel: BassDecodeChannel, generation: int,
                                    prime_seconds: float = 0.5, crossfade_seconds: float = 0.5,
                                    timeout_seconds: float = 8.0) -> None:
         """Connects and buffers the new station on a background thread while
@@ -217,20 +220,20 @@ class Player:
         new_buffer = StreamBuffer(int(BYTES_PER_SECOND * self.buffer_seconds))
         target_bytes = int(BYTES_PER_SECOND * prime_seconds)
         deadline = time.monotonic() + timeout_seconds
-        try:
-            while new_buffer.size < target_bytes and time.monotonic() < deadline:
-                if generation != self._decode_generation or self._stop_event.is_set():
-                    self._kill_quietly(new_proc)
-                    return
-                chunk = new_proc.stdout.read(8192)
-                if not chunk:
+        while new_buffer.size < target_bytes and time.monotonic() < deadline:
+            if generation != self._decode_generation or self._stop_event.is_set():
+                self._close_quietly(new_channel)
+                return
+            chunk = new_channel.read(8192)
+            if not chunk:
+                if not new_channel.is_active():
                     break  # new station EOF'd/died before buffering enough — cut over with whatever we have
-                new_buffer.write(chunk)
-        except (OSError, ValueError):
-            pass
+                time.sleep(0.02)
+                continue
+            new_buffer.write(chunk)
 
         if generation != self._decode_generation or self._stop_event.is_set():
-            self._kill_quietly(new_proc)
+            self._close_quietly(new_channel)
             return
 
         # The new station is ready — fade the OLD one out now (audible,
@@ -239,21 +242,17 @@ class Player:
             self._ramp_gain(0.0, crossfade_seconds)
 
         if generation != self._decode_generation or self._stop_event.is_set():
-            self._kill_quietly(new_proc)
+            self._close_quietly(new_channel)
             return
 
-        old_proc = self._proc
-        if old_proc is not None:
-            try:
-                old_proc.kill()
-                old_proc.wait(timeout=2)
-            except Exception:
-                pass
+        old_channel = self._channel
+        if old_channel is not None:
+            self._close_quietly(old_channel)
 
-        self._proc = new_proc
+        self._channel = new_channel
         self._buffer = new_buffer
         self._reader_thread = threading.Thread(
-            target=self._read_loop, args=(new_proc, new_buffer, generation), daemon=True)
+            target=self._read_loop, args=(new_channel, new_buffer, generation), daemon=True)
         self._reader_thread.start()
 
         if self.fade_enabled:
@@ -263,9 +262,9 @@ class Player:
             self._fade_gain = 1.0
 
     @staticmethod
-    def _kill_quietly(proc: subprocess.Popen) -> None:
+    def _close_quietly(channel: BassDecodeChannel) -> None:
         try:
-            proc.kill()
+            channel.close()
         except Exception:
             pass
 
@@ -282,13 +281,13 @@ class Player:
 
         self._decode_generation += 1
         generation = self._decode_generation
-        proc = self._spawn_decode_process(url)
-        if proc is None:
+        channel = self._spawn_decode_channel(url)
+        if channel is None:
             return
-        self._proc = proc
+        self._channel = channel
 
         self._reader_thread = threading.Thread(
-            target=self._read_loop, args=(proc, self._buffer, generation), daemon=True)
+            target=self._read_loop, args=(channel, self._buffer, generation), daemon=True)
         self._reader_thread.start()
 
         # Opening the output device immediately (as this used to) meant the
@@ -325,55 +324,32 @@ class Player:
             target=self._icy_loop, args=(url, generation, stop_event), daemon=True)
         self._icy_thread.start()
 
-    def _spawn_decode_process(self, url: str) -> Optional[subprocess.Popen]:
-        """Builds and launches the ffmpeg decode subprocess for `url`. This
-        subprocess is a pure decoder now -- audio effects are applied
-        afterwards, directly to the decoded PCM, by the DSP effect chain in
-        _open_output_stream()'s callback (see apply_effects()), so this
-        command never needs an `-af` chain and never needs restarting when
-        an effect changes.
+    def _spawn_decode_channel(self, url: str) -> Optional[BassDecodeChannel]:
+        """Opens `url` as a BASS decode-only channel, normalized to
+        SAMPLE_RATE/CHANNELS through a private BASSmix mixer regardless of
+        the source's native format. Audio effects are applied afterwards,
+        directly to the decoded PCM, by the DSP effect chain in
+        _open_output_stream()'s callback (see apply_effects()) -- this
+        channel is never restarted when an effect changes.
 
-        The one exception is self._rate (podcast playback speed): that's a
-        pitch-preserving time-stretch, which the numpy DSP chain has no way
-        to do, so it's the sole thing still applied via an ffmpeg `-af`
-        filter, built fresh for each decode -- ffmpeg's atempo filter is only
-        valid over 0.5-2.0 per instance, so a larger factor is split across
-        two chained atempo filters instead of one out-of-range value.
-
-        self._seek_seconds (also podcast-only) is an input seek (-ss before
-        -i, so ffmpeg can skip ahead cheaply rather than decoding and
-        discarding everything before it)."""
-        ffmpeg = self._ffmpeg or find_ffmpeg()
-        if not ffmpeg:
-            self._fail("FFmpeg was not found. Place ffmpeg.exe in resources/ffmpeg/ or install it on PATH.")
-            return None
-
-        cmd = [ffmpeg, "-hide_banner", "-loglevel", "error"]
-        if self._seek_seconds > 0:
-            cmd += ["-ss", str(self._seek_seconds)]
-        cmd += [
-            "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
-            "-i", url,
-            "-vn",
-        ]
-        if abs(self._rate - 1.0) > 1e-3:
-            if self._rate > 2.0:
-                cmd += ["-af", f"atempo=2.0,atempo={self._rate / 2.0}"]
-            else:
-                cmd += ["-af", f"atempo={self._rate}"]
-        cmd += [
-            "-f", "s16le", "-acodec", "pcm_s16le",
-            "-ac", str(CHANNELS), "-ar", str(SAMPLE_RATE),
-            "pipe:1",
-        ]
+        self._rate (podcast playback speed) is a pitch-preserving
+        time-stretch applied via a BASS_FX tempo wrapper -- only enabled for
+        on-demand (expect_eof=True) sources, since live radio has no
+        well-defined "speed". self._seek_seconds (also podcast-only) seeks
+        the channel to that position immediately after it's created, so a
+        rate/seek change doesn't sound like starting over from 0."""
         try:
-            return subprocess.Popen(
-                cmd, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                creationflags=CREATE_NO_WINDOW if hasattr(subprocess, "CREATE_NO_WINDOW") else 0,
-            )
-        except OSError as exc:
-            self._fail(f"Failed to launch FFmpeg: {exc}")
+            channel = BassDecodeChannel(
+                url, samplerate=SAMPLE_RATE, channels=CHANNELS, enable_tempo=self._expect_eof)
+        except BassError as exc:
+            self._fail(f"Failed to open stream: {exc}")
             return None
+        if self._expect_eof:
+            if abs(self._rate - 1.0) > 1e-3:
+                channel.set_tempo(self._rate)
+            if self._seek_seconds > 0:
+                channel.seek_seconds(self._seek_seconds)
+        return channel
 
     def stop(self) -> None:
         if self.fade_enabled and self._out_stream is not None and self._fade_gain > 0.0:
@@ -390,13 +366,9 @@ class Player:
                 except Exception:
                     pass
                 self._out_stream = None
-        if self._proc is not None:
-            try:
-                self._proc.kill()
-                self._proc.wait(timeout=2)
-            except Exception:
-                pass
-            self._proc = None
+        if self._channel is not None:
+            self._close_quietly(self._channel)
+            self._channel = None
         if self._buffer is not None:
             self._buffer.close()
             self._buffer = None
@@ -442,6 +414,43 @@ class Player:
     def set_pan(self, pan: float) -> None:
         """pan is 0.0 (full left) .. 1.0 (full right), 0.5 = centre."""
         self.pan = max(0.0, min(1.0, pan))
+
+    def set_rate(self, rate: float) -> bool:
+        """Live pitch-preserving speed change on the CURRENTLY playing
+        on-demand (podcast) source -- no restart, no reconnect, no gap.
+        Only takes effect if the channel was opened with expect_eof=True
+        (see _spawn_decode_channel); returns False if there's nothing
+        tempo-capable to adjust (e.g. currently playing live radio)."""
+        self._rate = max(0.5, min(3.0, rate))
+        if not self._expect_eof or self._channel is None:
+            return False
+        self._channel.set_tempo(self._rate)
+        return True
+
+    def seek(self, seconds: float) -> bool:
+        """Live seek within the currently playing on-demand (podcast)
+        source -- no restart, no reconnect. Returns False if there's no
+        seekable channel currently open."""
+        if not self._expect_eof or self._channel is None:
+            return False
+        self._seek_seconds = max(0.0, seconds)
+        self._channel.seek_seconds(self._seek_seconds)
+        return True
+
+    def position_seconds(self) -> float:
+        """Current AUDIBLE position of the on-demand source, tracked
+        natively by BASS -- replaces the old wall-clock estimation UI code
+        used to have to do itself. BASS decodes faster than real-time, so
+        the channel's own read cursor is ahead of what's actually coming out
+        of the speakers by however much is still sitting in our own
+        StreamBuffer; that's subtracted out here so callers get the position
+        that matches what's audible right now, not the decoder's lookahead."""
+        if self._channel is None:
+            return 0.0
+        pos = self._channel.position_seconds()
+        if self._buffer is not None:
+            pos -= self._buffer.size / BYTES_PER_SECOND
+        return max(0.0, pos)
 
     def apply_effects(self, effect_stages: list) -> None:
         """Update the real-time DSP effect chain from an ordered list of
@@ -565,44 +574,42 @@ class Player:
             self._out_stream = stream
             return True
 
-    def _read_loop(self, proc: subprocess.Popen, buf: Optional[StreamBuffer], generation: int) -> None:
+    def _read_loop(self, channel: BassDecodeChannel, buf: Optional[StreamBuffer], generation: int) -> None:
         try:
-            while not self._stop_event.is_set() and proc.poll() is None:
-                chunk = proc.stdout.read(8192)
+            while not self._stop_event.is_set():
+                chunk = channel.read(8192)
                 if not chunk:
-                    break
+                    if not channel.is_active():
+                        break  # real end-of-stream or dropped connection
+                    time.sleep(0.02)  # nothing decoded yet -- not an error, just not ready
+                    continue
                 if buf is not None:
                     buf.write(chunk)
                     # A live radio stream is naturally paced near real-time by
                     # the network, but decoding an on-demand file (a podcast
-                    # episode) has nothing to pace it -- ffmpeg can finish
-                    # decoding an hour-long episode in seconds. Without this,
-                    # the buffer fills to capacity almost instantly and its
-                    # overflow policy (drop oldest, meant to keep a live
-                    # stream at the live edge) starts continuously discarding
-                    # audio nearly as fast as it's decoded, which is audible
-                    # as constant fast-forwarding rather than normal playback.
+                    # episode) has nothing to pace it -- BASS can decode an
+                    # hour-long episode in seconds. Without this, the buffer
+                    # fills to capacity almost instantly and its overflow
+                    # policy (drop oldest, meant to keep a live stream at the
+                    # live edge) starts continuously discarding audio nearly
+                    # as fast as it's decoded, which is audible as constant
+                    # fast-forwarding rather than normal playback.
                     while (buf.fill_level > 0.9 and not self._stop_event.is_set()
-                           and generation == self._decode_generation and proc.poll() is None):
+                           and generation == self._decode_generation and channel.is_active()):
                         time.sleep(0.05)
                 if self.ad_detection_enabled:
                     self._feed_ad_detection(chunk, generation)
         except (OSError, ValueError):
             pass
         finally:
-            # If _decode_generation has moved on, this process was killed on
-            # purpose (effect change) rather than dropping unexpectedly —
+            # If _decode_generation has moved on, this channel was closed on
+            # purpose (station switch) rather than dropping unexpectedly —
             # don't report a false error for it.
             if (not self._stop_event.is_set() and self.state != PlayerState.ERROR
                     and generation == self._decode_generation):
                 if self._expect_eof:
-                    try:
-                        returncode = proc.wait(timeout=2)
-                    except subprocess.TimeoutExpired:
-                        returncode = None
-                    if returncode in (0, None):
-                        self._finish()
-                        return
+                    self._finish()
+                    return
                 threading.Thread(
                     target=log_if_geo_restricted, args=(self.station_name, self.url, self.proxies),
                     daemon=True).start()

@@ -319,3 +319,30 @@ class SettingsPanel(scrolled.ScrolledPanel):
         if self.on_apply:
             self.on_apply()
         wx.MessageBox("Settings applied.", "Settings", wx.OK | wx.ICON_INFORMATION)
+
+
+class SettingsDialog(wx.Dialog):
+    """Hosts a SettingsPanel (unchanged, including its own "Apply" button)
+    inside a dialog reached from Tools > Settings..., rather than a
+    permanent notebook tab."""
+
+    def __init__(self, parent, config: Config, on_apply=None,
+                 station_updater: StationUpdater = None,
+                 station_update_scheduler: StationUpdateScheduler = None,
+                 station_db: StationDB = None, on_station_db_updated=None):
+        super().__init__(parent, title="Settings", size=(640, 700),
+                          style=wx.DEFAULT_DIALOG_STYLE | wx.RESIZE_BORDER)
+        self.panel = SettingsPanel(
+            self, config, on_apply=on_apply, station_updater=station_updater,
+            station_update_scheduler=station_update_scheduler, station_db=station_db,
+            on_station_db_updated=on_station_db_updated,
+        )
+        close_btn = wx.Button(self, wx.ID_CLOSE, "&Close")
+
+        outer = wx.BoxSizer(wx.VERTICAL)
+        outer.Add(self.panel, 1, wx.EXPAND)
+        outer.Add(close_btn, 0, wx.ALIGN_RIGHT | wx.ALL, 8)
+        self.SetSizer(outer)
+
+        close_btn.Bind(wx.EVT_BUTTON, lambda e: self.EndModal(wx.ID_CLOSE))
+        self.Bind(wx.EVT_CLOSE, lambda e: self.EndModal(wx.ID_CLOSE))

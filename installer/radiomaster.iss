@@ -17,7 +17,7 @@
 ; without fighting over the same registry entry.
 
 #define MyAppName "RadioMaster"
-#define MyAppVersion "1.6.3"
+#define MyAppVersion "1.7.0"
 #define MyAppExeName "RadioMaster.exe"
 #define MyAppPublisher "Deenadayalan Moodley"
 #define MyDistDir "..\dist\RadioMaster"

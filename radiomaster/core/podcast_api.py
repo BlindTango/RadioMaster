@@ -255,3 +255,45 @@ def fetch_episodes(feed_url: str, proxies: Optional[dict] = None, limit: int = 3
             description=_clean_text(desc_el.text if desc_el is not None else None),
         ))
     return episodes
+
+
+def fetch_feed_metadata(feed_url: str, proxies: Optional[dict] = None) -> PodcastResult:
+    """Downloads and parses a podcast's own RSS feed to build a PodcastResult
+    directly from its <channel> tags -- used for "Add Feed" (a feed_url the
+    user already has, e.g. from outside any of the searchable directories),
+    which has no directory search result to draw title/author/artwork from."""
+    session = requests.Session()
+    session.headers["User-Agent"] = USER_AGENT
+    try:
+        resp = session.get(feed_url, timeout=15, proxies=proxies)
+        resp.raise_for_status()
+    except requests.RequestException as exc:
+        raise PodcastAPIError(f"Could not fetch podcast feed: {exc}") from exc
+    try:
+        root = ET.fromstring(resp.content)
+    except ET.ParseError as exc:
+        raise PodcastAPIError(f"Podcast feed is not valid XML: {exc}") from exc
+
+    channel = root.find("channel")
+    if channel is None:
+        raise PodcastAPIError("Feed has no <channel> element -- not a valid podcast RSS feed.")
+
+    title_el = channel.find("title")
+    author_el = channel.find(f"{_ITUNES_NS}author")
+    desc_el = channel.find("description") or channel.find(f"{_ITUNES_NS}summary")
+    image_el = channel.find(f"{_ITUNES_NS}image")
+    artwork_url = image_el.get("href") if image_el is not None else ""
+    if not artwork_url:
+        image_url_el = channel.find("image/url")
+        artwork_url = image_url_el.text if image_url_el is not None else ""
+    category_el = channel.find(f"{_ITUNES_NS}category")
+
+    return PodcastResult(
+        feed_url=feed_url,
+        title=_clean_text(title_el.text if title_el is not None else None) or feed_url,
+        author=_clean_text(author_el.text if author_el is not None else None),
+        artwork_url=artwork_url or "",
+        description=_clean_text(desc_el.text if desc_el is not None else None),
+        genre=category_el.get("text", "") if category_el is not None else "",
+        directory="Manual",
+    )
