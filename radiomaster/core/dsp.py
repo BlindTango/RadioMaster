@@ -438,7 +438,13 @@ class LoudnessNormalizer:
         self.target_rms = 0.2
         self.max_gain = 15.0
         self.compress = 0.0
-        self._rms_env = 0.0
+        # None until the first process() call, which seeds it to the target
+        # level rather than silence -- starting from 0.0 made the very first
+        # block look like near-total silence, so `desired` spiked to
+        # max_gain and stayed there for the ~0.5-1s the envelope needed to
+        # catch up, clipping the already-normal-level real audio the whole
+        # time (heard as a loud, distorted first second on every stream).
+        self._rms_env = None
         self._gain_smoothed = 1.0
 
     def update(self, params: dict) -> None:
@@ -452,10 +458,22 @@ class LoudnessNormalizer:
         right = x[:, 1].tolist()
         out_l = [0.0] * n
         out_r = [0.0] * n
+        if self._rms_env is None:
+            self._rms_env = self.target_rms ** 2
         rms_env = self._rms_env
         gain = self._gain_smoothed
-        alpha_rms = math.exp(-1.0 / (0.5 * self.fs))   # ~500ms measurement window
-        alpha_gain = math.exp(-1.0 / (0.2 * self.fs))  # ~200ms gain smoothing (avoids pumping)
+        alpha_rms = math.exp(-1.0 / (0.5 * self.fs))     # ~500ms measurement window
+        # Asymmetric, like a limiter's attack/release: react FAST when gain
+        # needs to come down (a loud passage just arrived -- must clamp it
+        # before it clips) but rise SLOWLY when gain needs to go up (a brief
+        # quiet passage, e.g. the natural gap between two tracks on the same
+        # station, must NOT be enough to crank gain toward max_gain in the
+        # ~1-2s the gap lasts -- previously it was, so the next track came
+        # in already-loud through an over-inflated gain and clipped/
+        # distorted for about a second until this symmetric ~200ms smoothing
+        # caught up).
+        alpha_gain_down = math.exp(-1.0 / (0.03 * self.fs))  # ~30ms
+        alpha_gain_up = math.exp(-1.0 / (3.0 * self.fs))     # ~3s
         target_rms = self.target_rms
         max_gain = self.max_gain
         extra_ratio = 1.0 + self.compress / 30.0
@@ -468,6 +486,7 @@ class LoudnessNormalizer:
             if desired > 1.0:
                 desired = desired ** extra_ratio
             desired = min(max_gain, max(0.1, desired))
+            alpha_gain = alpha_gain_down if desired < gain else alpha_gain_up
             gain = alpha_gain * gain + (1.0 - alpha_gain) * desired
             out_l[i] = max(-1.0, min(1.0, l * gain))
             out_r[i] = max(-1.0, min(1.0, r * gain))
