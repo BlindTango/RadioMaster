@@ -8,6 +8,14 @@ on every version bump.
 from __future__ import annotations
 
 CHANGELOG: dict[str, list[str]] = {
+    "1.8.1": [
+        "Fixed a UI freeze when switching radio stations, caused by the BASS engine's "
+        "network connect happening on the UI thread; it now connects in the background.",
+        "Fixed the podcast Rate slider taking several seconds to audibly apply — it now "
+        "drops the already-buffered old-rate audio instead of waiting for it to drain.",
+        "Fixed the Play/Pause button showing the wrong label after switching between the "
+        "Radio and Podcasts tabs while something was already playing.",
+    ],
     "1.8.0": [
         "Added an in-app updater: Help > Check for Updates... checks GitHub for a "
         "newer release, shows its release notes, and can download and launch the "

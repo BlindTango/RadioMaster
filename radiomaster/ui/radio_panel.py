@@ -309,6 +309,12 @@ class RadioPanel(scrolled.ScrolledPanel):
         self.player.on_stream_info = self._on_stream_info
         self.player.on_error = self._on_player_error
         self.player.on_ad_detected = self._on_ad_detected
+        # Switching stations while already playing (radio-to-radio, or a
+        # gapless hand-off from the Podcast panel) never fires a NEW state-
+        # change callback if the Player was already PLAYING throughout — sync
+        # this panel's own Play/Pause button to reality right now instead of
+        # waiting for an event that may never come.
+        self._on_player_state(self.player.state)
 
     # Cap on what this page ever asks the frame to grow to, regardless of
     # how much content ends up stacked on it (currently ~850px worth) — a

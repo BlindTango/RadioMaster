@@ -166,6 +166,11 @@ class PodcastPanel(scrolled.ScrolledPanel):
         self.player.on_finished = self._on_player_finished
         self.player.set_volume(self.controls.volume_slider.GetValue() / 100)
         self.player.set_pan(self.controls.pan_slider.GetValue() / 100)
+        # Gapless hand-off from the Radio panel never fires a NEW state-
+        # change callback if the Player was already PLAYING throughout — sync
+        # this panel's own Play/Pause button to reality right now instead of
+        # waiting for an event that may never come.
+        self._on_player_state(self.player.state)
 
     def set_proxies(self, proxies: Optional[dict]) -> None:
         self.itunes_directory.set_proxies(proxies)

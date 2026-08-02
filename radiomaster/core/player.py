@@ -192,22 +192,35 @@ class Player:
         self.url = url
         self._decode_generation += 1
         generation = self._decode_generation
+        self._station_generation += 1
+        station_generation = self._station_generation
 
+        # _spawn_decode_channel() opens the new station via BASS_StreamCreateURL,
+        # which blocks the calling thread until the connection/handshake
+        # completes (the ffmpeg subprocess this replaced was non-blocking to
+        # spawn) — do the whole connect-and-crossfade sequence on a
+        # background thread so switching stations never freezes the UI.
+        threading.Thread(
+            target=self._connect_and_crossfade, args=(url, generation, station_generation),
+            daemon=True).start()
+
+    def _connect_and_crossfade(self, url: str, generation: int, station_generation: int) -> None:
         new_channel = self._spawn_decode_channel(url)
         if new_channel is None:
+            return
+        if generation != self._decode_generation or self._stop_event.is_set():
+            self._close_quietly(new_channel)
             return
 
         # Metadata/probe loops are independent of the audio path — safe (and
         # desirable) to point them at the new URL immediately rather than
         # waiting for the crossfade to finish.
-        self._station_generation += 1
-        self._start_icy_thread(url, self._station_generation)
+        self._start_icy_thread(url, station_generation)
         self._probe_thread = threading.Thread(
-            target=self._probe_loop, args=(url, self._station_generation), daemon=True)
+            target=self._probe_loop, args=(url, station_generation), daemon=True)
         self._probe_thread.start()
 
-        threading.Thread(
-            target=self._prebuffer_then_crossfade, args=(new_channel, generation), daemon=True).start()
+        self._prebuffer_then_crossfade(new_channel, generation)
 
     def _prebuffer_then_crossfade(self, new_channel: BassDecodeChannel, generation: int,
                                    prime_seconds: float = 0.5, crossfade_seconds: float = 0.5,
@@ -281,8 +294,24 @@ class Player:
 
         self._decode_generation += 1
         generation = self._decode_generation
+        self._station_generation += 1
+        station_generation = self._station_generation
+
+        # _spawn_decode_channel() opens the station via BASS_StreamCreateURL,
+        # which blocks the calling thread until the connection/handshake
+        # completes (the ffmpeg subprocess this replaced was non-blocking to
+        # spawn) — do the connect on a background thread so switching
+        # stations never freezes the UI, no matter how slow/unresponsive the
+        # target server is.
+        threading.Thread(
+            target=self._connect_and_read, args=(url, generation, station_generation), daemon=True).start()
+
+    def _connect_and_read(self, url: str, generation: int, station_generation: int) -> None:
         channel = self._spawn_decode_channel(url)
         if channel is None:
+            return
+        if generation != self._decode_generation or self._stop_event.is_set():
+            self._close_quietly(channel)
             return
         self._channel = channel
 
@@ -304,11 +333,10 @@ class Player:
         if self.fade_enabled:
             threading.Thread(target=self._ramp_gain, args=(1.0, self.fade_seconds), daemon=True).start()
 
-        self._station_generation += 1
-        self._start_icy_thread(url, self._station_generation)
+        self._start_icy_thread(url, station_generation)
 
         self._probe_thread = threading.Thread(
-            target=self._probe_loop, args=(url, self._station_generation), daemon=True)
+            target=self._probe_loop, args=(url, station_generation), daemon=True)
         self._probe_thread.start()
 
     def _start_icy_thread(self, url: str, generation: int) -> None:
@@ -425,6 +453,18 @@ class Player:
         if not self._expect_eof or self._channel is None:
             return False
         self._channel.set_tempo(self._rate)
+        # The tempo change only affects audio decoded FROM NOW ON -- the
+        # ring buffer between the decode reader thread and the output
+        # callback can hold up to buffer_seconds (default 30s) of audio
+        # already decoded at the OLD rate, and the read-loop's "don't
+        # outrun real-time" throttle (see _read_loop) normally keeps it
+        # close to full for on-demand content, so without this the slider
+        # felt like it took several seconds to "catch up". Dropping it here
+        # is safe: read() zero-pads on underflow instead of blocking (see
+        # StreamBuffer.read), so this is a brief, inaudible gap rather than
+        # a glitch, and the reader thread refills it near-instantly.
+        if self._buffer is not None:
+            self._buffer.clear()
         return True
 
     def seek(self, seconds: float) -> bool:
