@@ -222,8 +222,12 @@ class SettingsPanel(scrolled.ScrolledPanel):
 
     def _on_configure_hotkeys(self, event: wx.CommandEvent) -> None:
         dlg = HotkeysDialog(self, self.config)
-        dlg.ShowModal()
+        result = dlg.ShowModal()
         dlg.Destroy()
+        # Re-register immediately so a new/changed binding works right away,
+        # instead of only after the user separately clicks Settings' Apply.
+        if result == wx.ID_OK and self.on_apply:
+            self.on_apply()
 
     def _on_browse_ffmpeg(self, event: wx.CommandEvent) -> None:
         with wx.FileDialog(self, "Select ffmpeg executable", wildcard="ffmpeg.exe|ffmpeg.exe|All files|*.*") as dlg:

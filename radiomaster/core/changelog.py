@@ -8,6 +8,16 @@ on every version bump.
 from __future__ import annotations
 
 CHANGELOG: dict[str, list[str]] = {
+    "1.9.0": [
+        "Redesigned the Global Hotkeys settings dialog: it's now a list you can add to, "
+        "edit, and remove from, instead of one fixed text box per action — and each "
+        "action can now have more than one hotkey bound to it.",
+        "Added support for binding multimedia/keyboard media keys (Play/Pause, Stop, "
+        "Next/Previous Track, Volume Up/Down, Mute) as global hotkeys, on their own or "
+        "combined with Ctrl/Alt/Shift/Win.",
+        "Hotkey changes made in Settings now take effect immediately, without needing a "
+        "separate Apply click.",
+    ],
     "1.8.2": [
         "Fixed recorded tracks sometimes staying stuck under their temporary filename "
         "instead of being renamed to \"Artist - Title\" — the rename now retries briefly "

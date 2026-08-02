@@ -45,13 +45,31 @@ _DEFAULTS = {
     "skip_update_version": None,
     "last_seen_version": None,
     "hotkeys": {
-        "play_pause": "Ctrl+Alt+P",
-        "stop": "Ctrl+Alt+S",
-        "record": "Ctrl+Alt+R",
-        "volume_up": "Ctrl+Alt+Up",
-        "volume_down": "Ctrl+Alt+Down",
+        "play_pause": ["Ctrl+Alt+P"],
+        "stop": ["Ctrl+Alt+S"],
+        "record": ["Ctrl+Alt+R"],
+        "volume_up": ["Ctrl+Alt+Up"],
+        "volume_down": ["Ctrl+Alt+Down"],
     },
 }
+
+
+def _normalize_hotkeys(raw) -> dict[str, list[str]]:
+    """Pre-1.9.0 configs stored one spec string per action; newer ones store a
+    list (an action can now have several bindings, e.g. a letter shortcut and
+    a multimedia key). Upgrades the old shape in place so callers never have
+    to special-case it."""
+    if not isinstance(raw, dict):
+        return {}
+    normalized: dict[str, list[str]] = {}
+    for action, value in raw.items():
+        if isinstance(value, str):
+            normalized[action] = [value] if value else []
+        elif isinstance(value, list):
+            normalized[action] = [v for v in value if isinstance(v, str) and v]
+        else:
+            normalized[action] = []
+    return normalized
 
 
 class Config:
@@ -72,6 +90,7 @@ class Config:
                     self._data.update(loaded)
                 except (json.JSONDecodeError, OSError):
                     pass
+            self._data["hotkeys"] = _normalize_hotkeys(self._data.get("hotkeys"))
 
     def save(self) -> None:
         with self._lock:
