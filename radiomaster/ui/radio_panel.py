@@ -200,6 +200,7 @@ class RadioPanel(scrolled.ScrolledPanel):
         self._connecting_station_name: Optional[str] = None
         self._connecting_since = 0.0
         self._ad_flagged = False
+        self._last_status_text = ""
         # Bumped on every track/station change so a lyrics fetch that's still
         # in flight when a newer one starts can recognize it's stale and
         # discard its result instead of overwriting the current track's
@@ -648,10 +649,20 @@ class RadioPanel(scrolled.ScrolledPanel):
             self._connecting_station_name = None  # gave up waiting for confirmation; fall through
         state_label = self.player.state.value.title()
         info = self.player.stream_info
-        self.set_status(format_status(
+        text = format_status(
             state_label, info.bitrate_kbps, info.codec, info.sample_rate, self.player.buffer_fill,
             self._ad_flagged,
-        ))
+        )
+        # SetStatusText() fires an accessible text-changed event NVDA speaks
+        # automatically, so re-sending it every second (as buffer_fill's raw
+        # percentage jitters up/down by 1) turns the status bar into constant
+        # chatter that talks over itself -- and over the one-off "Likely
+        # advertisement" flag this same line is meant to surface. Only push a
+        # new announcement when the rounded, screen-reader-facing text
+        # actually changed.
+        if text != self._last_status_text:
+            self._last_status_text = text
+            self.set_status(text)
         self._refresh_recordings_list()
 
     def play_station_object(self, station: Station) -> None:

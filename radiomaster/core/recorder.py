@@ -333,11 +333,23 @@ class Recorder:
             final_path = os.path.join(out_dir, f"{base} ({counter}).{ext}")
             counter += 1
 
-        try:
-            os.replace(temp_path, final_path)
-        except OSError:
-            log.exception("Could not rename recording %s -> %s", temp_path, final_path)
-            final_path = temp_path
+        # ffmpeg.exe process exit (proc.wait() above) doesn't guarantee Windows
+        # has released its handle on the output file yet -- antivirus/indexer
+        # scans of a freshly-written media file are a common extra holder, too.
+        # An immediate os.replace() can hit "file in use" (WinError 32) in that
+        # window even though nothing is actually still writing to it, silently
+        # leaving the file stuck under its temp "_recording_..." name forever.
+        # Retry briefly before giving up.
+        for attempt in range(5):
+            try:
+                os.replace(temp_path, final_path)
+                break
+            except OSError:
+                if attempt == 4:
+                    log.exception("Could not rename recording %s -> %s", temp_path, final_path)
+                    final_path = temp_path
+                else:
+                    time.sleep(0.2 * (attempt + 1))
 
         if info.title:
             tag_file(final_path, info, self.station_name, self.fmt, proxies=self.proxies)

@@ -8,6 +8,14 @@ on every version bump.
 from __future__ import annotations
 
 CHANGELOG: dict[str, list[str]] = {
+    "1.8.2": [
+        "Fixed recorded tracks sometimes staying stuck under their temporary filename "
+        "instead of being renamed to \"Artist - Title\" — the rename now retries briefly "
+        "if Windows still has the just-finished file handle open.",
+        "Fixed the Radio tab's status bar announcing itself to screen readers roughly "
+        "once a second (drowning out the \"Likely advertisement\" flag and anything else "
+        "useful) — it now only announces when the spoken text actually changes.",
+    ],
     "1.8.1": [
         "Fixed a UI freeze when switching radio stations, caused by the BASS engine's "
         "network connect happening on the UI thread; it now connects in the background.",

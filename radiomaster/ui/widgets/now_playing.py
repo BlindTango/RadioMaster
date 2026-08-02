@@ -56,7 +56,11 @@ def format_status(state_label: str, bitrate_kbps: int = 0, codec: str = "",
         parts.append(codec)
     if sample_rate:
         parts.append(f"{sample_rate} Hz")
-    parts.append(f"Buffer: {int(buffer_fill * 100)}%")
+    # Rounded to the nearest 5% -- the raw percentage jitters by 1-2 points
+    # essentially every tick, which would otherwise make this "stable" text
+    # change (and re-announce to screen readers) almost continuously.
+    rounded_fill = int(round(buffer_fill * 100 / 5) * 5)
+    parts.append(f"Buffer: {rounded_fill}%")
     if ad_flagged:
         parts.append("Likely advertisement")
     return " | ".join(parts)
