@@ -22,6 +22,8 @@ from __future__ import annotations
 
 import logging
 import os
+import subprocess
+import threading
 from typing import Optional
 
 import wx
@@ -40,6 +42,7 @@ from ..core.station_api import Station, StationAPI
 from ..core.station_db import StationDB
 from ..core.station_update_scheduler import StationUpdateScheduler
 from ..core.station_updater import StationUpdater, UpdateResult
+from ..core.updater import UpdateChecker, UpdateCheckError, UpdateInfo
 from ..utils.config import Config
 from ..utils.paths import podcasts_dir, recordings_dir
 from ..utils.wx_safe import call_after_safe
@@ -51,6 +54,8 @@ from .podcast_panel import PodcastPanel
 from .radio_panel import RadioPanel
 from .scheduler_panel import SchedulerDialog
 from .settings_panel import SettingsDialog
+from .update_dialog import UpdateAvailableDialog
+from .whats_new_dialog import WhatsNewDialog
 
 log = logging.getLogger(__name__)
 
@@ -160,6 +165,15 @@ class MainFrame(wx.Frame):
         if self.config.get("auto_play_last_station", False):
             call_after_safe(self, self._auto_play_last_station)
 
+        seen_version = self.config.get("last_seen_version")
+        if seen_version != __version__:
+            if seen_version is not None:
+                call_after_safe(self, self._on_whats_new, None)
+            self.config.set("last_seen_version", __version__)
+
+        if self.config.get("check_for_updates_enabled", True):
+            call_after_safe(self, self._run_update_check, True)
+
     def _apply_window_size(self, default_w: int, default_h: int) -> None:
         self.Layout()
         # RadioPanel is a ScrolledWindow that caps its own reported
@@ -218,6 +232,11 @@ class MainFrame(wx.Frame):
         help_menu = wx.Menu()
         help_item = help_menu.Append(wx.ID_HELP, "&Help Contents\tF1", "How to use RadioMaster")
         self.Bind(wx.EVT_MENU, self._on_help, help_item)
+        whats_new_item = help_menu.Append(wx.ID_ANY, "What's &New...", "Show the RadioMaster changelog")
+        self.Bind(wx.EVT_MENU, self._on_whats_new, whats_new_item)
+        check_updates_item = help_menu.Append(wx.ID_ANY, "Check for &Updates...", "Check GitHub for a newer version of RadioMaster")
+        self.Bind(wx.EVT_MENU, self._on_check_for_updates, check_updates_item)
+        help_menu.AppendSeparator()
         about_item = help_menu.Append(wx.ID_ABOUT, "&About RadioMaster", "Version and copyright information")
         self.Bind(wx.EVT_MENU, self._on_about, about_item)
         menu_bar.Append(help_menu, "&Help")
@@ -358,6 +377,56 @@ class MainFrame(wx.Frame):
         dlg = AboutDialog(self)
         dlg.ShowModal()
         dlg.Destroy()
+
+    def _on_whats_new(self, event) -> None:
+        dlg = WhatsNewDialog(self, __version__)
+        dlg.ShowModal()
+        dlg.Destroy()
+
+    def _on_check_for_updates(self, event) -> None:
+        self._run_update_check(silent=False)
+
+    def _run_update_check(self, silent: bool) -> None:
+        checker = UpdateChecker(proxies=self._proxies())
+
+        def worker():
+            try:
+                info = checker.check(__version__)
+            except UpdateCheckError as exc:
+                if silent:
+                    log.info("Silent update check failed: %s", exc)
+                else:
+                    call_after_safe(self, self._update_check_failed, str(exc))
+                return
+            call_after_safe(self, self._update_check_result, checker, info, silent)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _update_check_failed(self, message: str) -> None:
+        wx.MessageBox(message, "Check for Updates", wx.OK | wx.ICON_ERROR, self)
+
+    def _update_check_result(self, checker: UpdateChecker, info: Optional[UpdateInfo], silent: bool) -> None:
+        if info is None:
+            if not silent:
+                wx.MessageBox(
+                    f"You're up to date - RadioMaster {__version__} is the latest version.",
+                    "Check for Updates", wx.OK | wx.ICON_INFORMATION, self)
+            return
+        if silent and self.config.get("skip_update_version") == info.version:
+            return
+        dlg = UpdateAvailableDialog(self, checker, info, self._on_ready_to_install)
+        result = dlg.ShowModal()
+        if result == wx.ID_NO:
+            self.config.set("skip_update_version", info.version)
+        dlg.Destroy()
+
+    def _on_ready_to_install(self, installer_path: str) -> None:
+        try:
+            subprocess.Popen([installer_path])
+        except OSError as exc:
+            wx.MessageBox(f"Could not launch the installer: {exc}", "Update", wx.OK | wx.ICON_ERROR, self)
+            return
+        self.Close()
 
     def _register_hotkeys(self) -> None:
         hotkeys = self.config.get("hotkeys", {})

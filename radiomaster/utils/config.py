@@ -41,6 +41,9 @@ _DEFAULTS = {
     "podcast_volume": 1.0,
     "podcast_rate": 1.0,
     "podcast_pan": 0.5,
+    "check_for_updates_enabled": True,
+    "skip_update_version": None,
+    "last_seen_version": None,
     "hotkeys": {
         "play_pause": "Ctrl+Alt+P",
         "stop": "Ctrl+Alt+S",

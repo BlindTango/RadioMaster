@@ -146,6 +146,10 @@ class SettingsPanel(scrolled.ScrolledPanel):
             self, label="Automatically m&ute audio during a detected ad break")
         self.ad_auto_mute_check.SetValue(config.get("ad_auto_mute_enabled", True))
 
+        self.check_updates_check = wx.CheckBox(
+            self, label="Chec&k for updates automatically on startup")
+        self.check_updates_check.SetValue(config.get("check_for_updates_enabled", True))
+
         self.hotkeys_btn = wx.Button(self, label="Configure &Global Hotkeys...")
 
         self.apply_btn = wx.Button(self, label="&Apply")
@@ -187,6 +191,7 @@ class SettingsPanel(scrolled.ScrolledPanel):
         outer.Add(self.mute_while_recording_check, 0, wx.LEFT, 10)
         outer.Add(self.ad_detection_check, 0, wx.LEFT, 10)
         outer.Add(self.ad_auto_mute_check, 0, wx.LEFT, 10)
+        outer.Add(self.check_updates_check, 0, wx.LEFT, 10)
         outer.Add(self.hotkeys_btn, 0, wx.ALL, 6)
         outer.Add(row("Log &level:", self.log_level_choice), 0, wx.EXPAND | wx.ALL, 6)
         outer.Add(self.apply_btn, 0, wx.ALL, 10)
@@ -305,6 +310,7 @@ class SettingsPanel(scrolled.ScrolledPanel):
         self.config.set("mute_playback_while_recording", self.mute_while_recording_check.GetValue(), save=False)
         self.config.set("ad_detection_enabled", self.ad_detection_check.GetValue(), save=False)
         self.config.set("ad_auto_mute_enabled", self.ad_auto_mute_check.GetValue(), save=False)
+        self.config.set("check_for_updates_enabled", self.check_updates_check.GetValue(), save=False)
         new_log_level = LOG_LEVELS[self.log_level_choice.GetSelection()]
         self.config.set("log_level", new_log_level, save=False)
         set_log_level(new_log_level)

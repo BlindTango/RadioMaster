@@ -14,6 +14,8 @@ import wx.lib.scrolledpanel as scrolled
 from ..core.custom_stations import CustomStationsStore
 from ..core.effects_store import EffectsPresetStore, EffectsStateStore, build_active_effect_chain
 from ..core.favourites import FavouritesStore
+from ..core.lyrics import LyricsFetchError, LyricsResult, fetch_lyrics
+from ..core.metadata import split_icy_title
 from ..core.player import Player, PlayerState, StreamInfo
 from ..core.recorder import StationRecordingSession
 from ..core.station_api import Station, StationAPI, StationAPIError
@@ -21,6 +23,7 @@ from ..core.station_db import StationDB
 from ..core.station_updater import StationUpdater
 from ..utils.config import Config
 from ..utils.wx_safe import call_after_safe
+from .widgets.lyrics_panel import LyricsPanel
 from .widgets.now_playing import NowPlayingPanel, format_status
 from .widgets.player_controls import PlayerControls
 from .widgets.recordings_list import RecordingsList
@@ -197,6 +200,11 @@ class RadioPanel(scrolled.ScrolledPanel):
         self._connecting_station_name: Optional[str] = None
         self._connecting_since = 0.0
         self._ad_flagged = False
+        # Bumped on every track/station change so a lyrics fetch that's still
+        # in flight when a newer one starts can recognize it's stale and
+        # discard its result instead of overwriting the current track's
+        # lyrics with an old track's — same race-guard pattern as _search_seq.
+        self._lyrics_seq = 0
 
         search_label = wx.StaticText(self, label="&Search:")
         self.search_ctrl = wx.TextCtrl(self, style=wx.TE_PROCESS_ENTER)
@@ -215,6 +223,7 @@ class RadioPanel(scrolled.ScrolledPanel):
         # but not genuinely usable for browsing).
         self.tree.SetMinSize((-1, 320))
         self.now_playing = NowPlayingPanel(self)
+        self.lyrics_panel = LyricsPanel(self)
         self.controls = PlayerControls(self)
 
         self.add_custom_btn = wx.Button(self, label="&Add Custom Station")
@@ -242,6 +251,7 @@ class RadioPanel(scrolled.ScrolledPanel):
         outer.Add(self.tree, 1, wx.EXPAND | wx.LEFT | wx.RIGHT, 6)
         outer.Add(action_row, 0, wx.EXPAND | wx.ALL, 6)
         outer.Add(self.now_playing, 0, wx.EXPAND | wx.LEFT | wx.RIGHT, 6)
+        outer.Add(self.lyrics_panel, 0, wx.EXPAND | wx.ALL, 6)
         outer.Add(self.controls, 0, wx.EXPAND | wx.ALL, 6)
         outer.Add(self.recordings_list, 0, wx.EXPAND | wx.ALL, 6)
         self.SetSizer(outer)
@@ -401,6 +411,8 @@ class RadioPanel(scrolled.ScrolledPanel):
     def _play_station(self, station: Station) -> None:
         self.now_playing.set_station(station.name)
         self.now_playing.set_now_playing("")
+        self._lyrics_seq += 1
+        self.lyrics_panel.clear()
         # Immediate feedback rather than waiting for the next 1s status tick —
         # without this there's up to a second where the status bar still
         # shows the PREVIOUS station's state/bitrate with nothing indicating
@@ -439,6 +451,8 @@ class RadioPanel(scrolled.ScrolledPanel):
         self._connecting_station_name = None
         self.now_playing.set_station("")
         self.now_playing.set_now_playing("")
+        self._lyrics_seq += 1
+        self.lyrics_panel.clear()
 
     def _on_mute(self) -> None:
         muted = self.player.toggle_mute()
@@ -568,6 +582,41 @@ class RadioPanel(scrolled.ScrolledPanel):
     def _on_now_playing(self, title: str) -> None:
         self._connecting_station_name = None
         call_after_safe(self, self.now_playing.set_now_playing, title)
+        call_after_safe(self, self._start_lyrics_fetch, title)
+
+    def _start_lyrics_fetch(self, title: str) -> None:
+        self._lyrics_seq += 1
+        seq = self._lyrics_seq
+        artist, song = split_icy_title(title.strip()) if title.strip() else ("Unknown", "")
+        if not song or artist == "Unknown":
+            self.lyrics_panel.clear()
+            return
+
+        self.lyrics_panel.set_status(f"Fetching lyrics for {artist} - {song}...")
+        self.lyrics_panel.set_lyrics("")
+        proxies = self._proxies()
+
+        def worker():
+            try:
+                result = fetch_lyrics(artist, song, proxies=proxies)
+            except LyricsFetchError as exc:
+                call_after_safe(self, self._on_lyrics_result, seq, None, str(exc))
+                return
+            call_after_safe(self, self._on_lyrics_result, seq, result, None)
+
+        threading.Thread(target=worker, daemon=True).start()
+
+    def _on_lyrics_result(self, seq: int, result: Optional[LyricsResult], error: Optional[str]) -> None:
+        if seq != self._lyrics_seq:
+            return  # a newer track has since started; discard this stale result
+        if error:
+            self.lyrics_panel.set_status(f"Lyrics unavailable: {error}")
+            return
+        if result is None:
+            self.lyrics_panel.set_status("No lyrics found for this track.")
+            return
+        self.lyrics_panel.set_status(f"Lyrics for {result.artist} - {result.title}:")
+        self.lyrics_panel.set_lyrics(result.text)
 
     def _on_stream_info(self, info: StreamInfo) -> None:
         self._connecting_station_name = None

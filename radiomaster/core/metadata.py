@@ -28,7 +28,7 @@ class TrackInfo:
     source: str = ""
 
 
-def _split_icy_title(icy_text: str) -> tuple[str, str]:
+def split_icy_title(icy_text: str) -> tuple[str, str]:
     """ICY StreamTitle is usually 'Artist - Title'."""
     if " - " in icy_text:
         artist, title = icy_text.split(" - ", 1)
@@ -159,7 +159,7 @@ def get_track_info(now_playing_text: str, use_deezer: bool = True,
             return result
 
     if query:
-        artist, title = _split_icy_title(query)
+        artist, title = split_icy_title(query)
         return TrackInfo(artist=artist, title=title, source="icy")
 
     return TrackInfo()

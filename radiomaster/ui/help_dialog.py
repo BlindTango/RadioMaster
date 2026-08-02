@@ -7,16 +7,27 @@ import wx
 
 TOPICS: list[tuple[str, str]] = [
     ("Getting Started", (
-        "RadioMaster streams internet radio stations, records them automatically, "
-        "and applies audio effects — all fully operable by keyboard and screen reader.\n\n"
-        "The main window is a list of pages on the left: Radio, Favourites, Scheduler, "
-        "Effects, and Settings. Use Tab/Shift+Tab or the arrow keys in that list to "
-        "switch pages.\n\n"
+        "RadioMaster streams internet radio stations and podcasts, records them "
+        "automatically, and applies audio effects — all fully operable by keyboard "
+        "and screen reader.\n\n"
+        "The main window has three tabs: Radio, Favourites, and Podcasts. Use "
+        "Ctrl+Tab/Ctrl+Shift+Tab or click a tab to switch between them. Everything "
+        "else — audio effects, recording scheduler, settings, and this help system — "
+        "is reached from the menu bar rather than a tab, so the main window stays "
+        "focused on whatever you're actually listening to.\n\n"
         "On first launch, RadioMaster downloads the Radio Browser station catalog into "
         "a local database (a few seconds). After that, browsing is instant and works "
         "offline using the cached copy."
     )),
-    ("Radio Page: Browsing & Searching", (
+    ("Menu Bar Overview", (
+        "File: Podcasts submenu (Import/Export OPML, Add Feed by URL), Open Recording "
+        "Folder, Open Podcast Folder, Exit.\n\n"
+        "Effects: one submenu per audio effect (On/Off, presets, Settings...) — this "
+        "replaces the old on-page Effects box.\n\n"
+        "Tools: Settings..., Recording Scheduler....\n\n"
+        "Help: Help Contents, What's New, Check for Updates, About RadioMaster."
+    )),
+    ("Radio Tab: Browsing & Searching", (
         "The station tree groups stations By Genre, By Country, and By Language. "
         "Expand a group to load its stations (loaded on demand, so the tree stays fast "
         "no matter how large the catalog is).\n\n"
@@ -34,7 +45,18 @@ TOPICS: list[tuple[str, str]] = [
         "Record starts an independent recording of whichever station is currently "
         "SELECTED in the tree — not necessarily the one playing. This means you can "
         "listen to one station while recording several different ones at the same time; "
-        "see 'Active Recordings' below."
+        "see 'Recording & Active Recordings' below."
+    )),
+    ("Lyrics", (
+        "The Lyrics box below Now Playing automatically looks up lyrics for whatever "
+        "track is currently playing, using the same 'Artist - Title' text the station "
+        "sends. A status line above the lyrics text shows Fetching..., No lyrics found "
+        "for this track, or an error if the lookup failed — the lyrics text itself only "
+        "ever contains the song's actual words.\n\n"
+        "Lyrics are reformatted for readability: line endings are normalized and long "
+        "runs of blank lines are collapsed to one, so verses and choruses stay visually "
+        "separated without walls of empty space. Instrumental tracks, jingles, and "
+        "stations that don't announce track titles simply show no lyrics."
     )),
     ("Recording & Active Recordings", (
         "Recording automatically splits into one file per track whenever the station's "
@@ -44,49 +66,82 @@ TOPICS: list[tuple[str, str]] = [
         "Each saved track is named 'Artist - Title' using metadata resolved from Deezer, "
         "then MusicBrainz, then (if configured) AcoustID audio fingerprinting, falling "
         "back to the station's raw text if all else fails.\n\n"
-        "The Active Recordings list at the bottom of the Radio page shows every "
+        "The Active Recordings list at the bottom of the Radio tab shows every "
         "recording currently running, with elapsed time. Select one and press Stop "
         "Selected Recording to end it — or use the Record button again after selecting "
-        "that same station in the tree."
+        "that same station in the tree.\n\n"
+        "Use File > Open Recording Folder at any time to browse saved recordings "
+        "directly in File Explorer."
     )),
     ("Favourites", (
-        "The Favourites page lists your saved stations. Press Enter or Play to start "
+        "The Favourites tab lists your saved stations. Press Enter or Play to start "
         "one immediately, Remove to delete it, or Move Up/Move Down to reorder the list."
     )),
-    ("Scheduler", (
-        "Schedule automatic recordings: one-time, daily, weekly (specific weekdays), "
-        "Nth weekday of the month (e.g. 'every 3rd Monday'), or a custom day interval. "
-        "Pick a station from your Favourites or Custom Stations, a start time, a "
-        "duration (or 'until stopped'), and an output format.\n\n"
+    ("Podcasts & OPML", (
+        "The Podcasts tab searches podcast directories (and PodcastIndex, if you've "
+        "added an API key/secret in Settings) and lists your subscriptions with their "
+        "episodes.\n\n"
+        "File > Podcasts > Add Feed... subscribes directly by feed URL, useful for "
+        "podcasts that don't show up in directory search. File > Podcasts > Import/"
+        "Export OPML lets you move your subscription list to or from another podcast "
+        "app.\n\n"
+        "Use File > Open Podcast Folder to browse downloaded podcast data directly in "
+        "File Explorer."
+    )),
+    ("Audio Effects (Effects Menu)", (
+        "The Effects menu has one submenu per effect: Chorus, Compressor, Distortion, "
+        "Echo, Flanger, Gargle, Reverb, Equalizer, and Loudness. Each submenu has an "
+        "On item to enable/disable that effect on the live playback stream, a list of "
+        "presets (pick one to apply it immediately), and a Settings... item.\n\n"
+        "An effect's Settings dialog is where presets are managed: New/Rename/Delete/"
+        "Save presets, with every parameter of the underlying audio effect exposed as "
+        "its own control, so presets can be tuned precisely.\n\n"
+        "Reverb and Gargle are approximations — Reverb uses layered echo taps, Gargle "
+        "uses amplitude modulation (tremolo). Both are documented as such next to their "
+        "controls."
+    )),
+    ("Recording Scheduler", (
+        "Tools > Recording Scheduler... schedules automatic recordings: one-time, "
+        "daily, weekly (specific weekdays), Nth weekday of the month (e.g. 'every 3rd "
+        "Monday'), or a custom day interval. Pick a station from your Favourites or "
+        "Custom Stations, a start time, a duration (or 'until stopped'), and an output "
+        "format.\n\n"
         "The schedule list shows every configured recording with an enabled/disabled "
         "toggle. Overlapping schedules are flagged before saving."
     )),
-    ("Audio Effects", (
-        "The Effects box on the Radio page lists eight effects: Chorus, Compressor, "
-        "Distortion, Echo, Flanger, Gargle, Reverb, and Equalizer. Check a box to enable "
-        "an effect on the live playback stream, and use its dropdown to pick a preset.\n\n"
-        "The separate Effects page is where presets are managed: pick an effect on the "
-        "left, then New/Rename/Delete/Save presets on the right. Every parameter of the "
-        "underlying audio filter is exposed as its own control, so presets can be tuned "
-        "precisely.\n\n"
-        "Reverb and Gargle are approximations (ffmpeg has no filter literally named "
-        "either one) — Reverb uses layered echo taps, Gargle uses amplitude modulation "
-        "(tremolo). Both are documented as such next to their controls."
-    )),
     ("Settings", (
-        "Settings covers: output soundcard, stream buffer size, VPN/proxy routing, "
-        "FFmpeg path override, metadata sources (Deezer/MusicBrainz/AcoustID), default "
-        "recording format, minimum track length, theme, station database update "
-        "frequency, auto-play-last-station on startup, fade in/out between stations, "
-        "muting live playback while recording, log level, and global hotkeys.\n\n"
+        "Tools > Settings... covers: output soundcard, stream buffer size, VPN/proxy "
+        "routing, FFmpeg path override, metadata sources (Deezer/MusicBrainz/AcoustID), "
+        "PodcastIndex API key/secret, default recording format, minimum track length, "
+        "theme, station database update frequency, auto-play-last-station on startup, "
+        "fade in/out between stations, muting live playback while recording, ad "
+        "detection, checking for updates automatically on startup, log level, and "
+        "global hotkeys.\n\n"
         "Remember to press Apply after changing any Settings field."
     )),
     ("Global Hotkeys", (
-        "Settings > Configure Global Hotkeys lets you assign system-wide key "
+        "Tools > Settings... > Configure Global Hotkeys lets you assign system-wide key "
         "combinations for Play/Pause, Stop, Record Selected Station, Volume Up, and "
         "Volume Down — these work even when RadioMaster isn't the focused window. "
         "Type a combination like Ctrl+Alt+P into each field, or leave a field blank to "
         "disable that hotkey."
+    )),
+    ("File Menu Shortcuts", (
+        "File > Open Recording Folder and File > Open Podcast Folder jump straight to "
+        "the relevant folder in File Explorer, without needing to know where RadioMaster "
+        "stores its data on disk."
+    )),
+    ("Checking for Updates", (
+        "Help > Check for Updates... checks GitHub for a newer release right away, and "
+        "shows the release notes plus a Download & Install button if one is found.\n\n"
+        "By default RadioMaster also checks automatically, silently, once at startup — "
+        "this can be turned off in Tools > Settings.... If a check finds nothing new, "
+        "or a silent check fails (e.g. no internet connection), RadioMaster stays "
+        "quiet; only a manual Check for Updates reports 'you're up to date' or an "
+        "error.\n\n"
+        "Help > What's New... shows the changelog for the installed version and every "
+        "earlier version, and pops up automatically the first time you start "
+        "RadioMaster after an update."
     )),
     ("Accessibility Notes", (
         "Every control has an explicit accessible name read by NVDA/Narrator, "
