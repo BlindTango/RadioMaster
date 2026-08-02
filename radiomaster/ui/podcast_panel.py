@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import logging
 import threading
+import time
 from typing import Optional
 
 import wx
@@ -58,6 +59,14 @@ class PodcastPanel(scrolled.ScrolledPanel):
         self._playing_podcast: Optional[PodcastResult] = None
         self._playing_episodes: list[Episode] = []
         self._playing_index: Optional[int] = None
+        # Estimated source-file position of the current playback segment,
+        # used only so a live rate change (see _on_rate_committed) can
+        # restart ffmpeg from roughly where it left off instead of from 0 --
+        # there's no real seek bar/scrubbing feature, this is purely internal
+        # bookkeeping for that one purpose.
+        self._segment_position_seconds = 0.0
+        self._segment_started_wall: Optional[float] = None
+        self._segment_rate = 1.0
         self._search_seq = 0
         self._episodes_seq = 0
 
@@ -146,6 +155,7 @@ class PodcastPanel(scrolled.ScrolledPanel):
         self.controls.on_next = self._on_next
         self.controls.on_volume_changed = self._on_volume_changed
         self.controls.on_rate_changed = self._on_rate_changed
+        self.controls.on_rate_committed = self._on_rate_committed
         self.controls.on_pan_changed = self._on_pan_changed
 
         self._refresh_subscriptions()
@@ -328,18 +338,35 @@ class PodcastPanel(scrolled.ScrolledPanel):
         self._playing_podcast = podcast
         self._playing_episodes = episodes
         self._playing_index = index
-        self._play_current()
+        self._play_current(seek_seconds=0.0)
 
-    def _play_current(self) -> None:
+    def _play_current(self, seek_seconds: float = 0.0) -> None:
         if self._playing_index is None or self._playing_index >= len(self._playing_episodes):
             return
         episode = self._playing_episodes[self._playing_index]
         rate = self.controls.rate_slider.GetValue() / 100.0
         podcast_title = self._playing_podcast.title if self._playing_podcast else ""
-        self.player.start(episode.audio_url, station_name=podcast_title, expect_eof=True, rate=rate)
+        self.player.start(episode.audio_url, station_name=podcast_title, expect_eof=True,
+                           rate=rate, seek_seconds=seek_seconds)
+        self._segment_position_seconds = seek_seconds
+        self._segment_started_wall = time.monotonic()
+        self._segment_rate = rate
         self.now_playing.set_station(podcast_title)
         self.now_playing.set_now_playing(episode.title)
         self.set_status(f"Status: Playing '{episode.title}'")
+
+    def _estimate_position_seconds(self) -> float:
+        """Best-effort guess at how far into the current episode playback
+        actually is, purely so a live rate change (_on_rate_committed) can
+        resume close to the same spot instead of restarting from 0 --
+        atempo means N real seconds of playback consume N*rate seconds of
+        source material, so that factor has to be applied here too."""
+        if self._segment_started_wall is None:
+            return self._segment_position_seconds
+        if self.player.state == PlayerState.PAUSED:
+            return self._segment_position_seconds
+        elapsed_wall = time.monotonic() - self._segment_started_wall
+        return self._segment_position_seconds + elapsed_wall * self._segment_rate
 
     def _on_play(self) -> None:
         if self.player.state == PlayerState.PLAYING:
@@ -383,6 +410,22 @@ class PodcastPanel(scrolled.ScrolledPanel):
     def _on_volume_changed(self, percent: int) -> None:
         self.player.set_volume(percent / 100)
         self.config.set("podcast_volume", percent / 100)
+
+    def _on_rate_committed(self, rate: float) -> None:
+        """The Rate slider settled on a new value (drag released, or a
+        keyboard step) -- if an episode is actually playing right now,
+        restart its decode at the new rate from roughly the current
+        position (see player.py's seek_seconds); ffmpeg has no way to
+        change atempo on an already-running process, so a brief restart is
+        the only way to make this take effect immediately rather than
+        leaving the slider looking broken until the next episode."""
+        if self._playing_index is not None and self.player.state in (
+                PlayerState.PLAYING, PlayerState.CONNECTING, PlayerState.PAUSED):
+            was_paused = self.player.state == PlayerState.PAUSED
+            position = self._estimate_position_seconds()
+            self._play_current(seek_seconds=position)
+            if was_paused:
+                self.player.pause()
 
     def _on_rate_changed(self, rate: float) -> None:
         self.config.set("podcast_rate", rate)

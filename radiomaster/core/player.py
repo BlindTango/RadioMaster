@@ -149,6 +149,7 @@ class Player:
         self.on_finished: Optional[Callable[[], None]] = None
         self._expect_eof = False
         self._rate = 1.0
+        self._seek_seconds = 0.0
 
     # ---- public controls ---------------------------------------------------
 
@@ -157,7 +158,7 @@ class Player:
         self.fade_seconds = max(0.05, seconds)
 
     def start(self, url: str, station_name: str = "", expect_eof: bool = False,
-               rate: float = 1.0) -> None:
+               rate: float = 1.0, seek_seconds: float = 0.0) -> None:
         """Switching stations while one is actually PLAYING goes through the
         gapless path (old keeps playing until the new one is ready, then
         fades out — see _switch_gapless); anything else (nothing playing
@@ -167,12 +168,18 @@ class Player:
         expect_eof=True is for on-demand media (a podcast episode) that is
         SUPPOSED to end on its own -- a clean EOF fires on_finished instead
         of being treated as a dropped connection (see _read_loop). rate is
-        a pitch-preserving playback speed multiplier (1.0 = normal); it only
-        takes effect from the start of THIS call, not for the segment
-        already playing."""
+        a pitch-preserving playback speed multiplier (1.0 = normal); changing
+        it mid-episode means calling start() again on the same url, so
+        seek_seconds lets the caller resume from roughly where the previous
+        segment left off instead of restarting from 0 (there's no frame-
+        accurate position tracking here -- callers estimate elapsed time
+        themselves and pass their best guess; ffmpeg's -ss input seek is not
+        perfectly sample-accurate on all formats, but close enough for a
+        rate change to not feel like a restart)."""
         self.station_name = station_name
         self._expect_eof = expect_eof
         self._rate = max(0.5, min(3.0, rate))
+        self._seek_seconds = max(0.0, seek_seconds)
         if self.state == PlayerState.PLAYING and self._proc is not None and self._out_stream is not None:
             self._switch_gapless(url)
             return
@@ -331,14 +338,20 @@ class Player:
         to do, so it's the sole thing still applied via an ffmpeg `-af`
         filter, built fresh for each decode -- ffmpeg's atempo filter is only
         valid over 0.5-2.0 per instance, so a larger factor is split across
-        two chained atempo filters instead of one out-of-range value."""
+        two chained atempo filters instead of one out-of-range value.
+
+        self._seek_seconds (also podcast-only) is an input seek (-ss before
+        -i, so ffmpeg can skip ahead cheaply rather than decoding and
+        discarding everything before it)."""
         ffmpeg = self._ffmpeg or find_ffmpeg()
         if not ffmpeg:
             self._fail("FFmpeg was not found. Place ffmpeg.exe in resources/ffmpeg/ or install it on PATH.")
             return None
 
-        cmd = [
-            ffmpeg, "-hide_banner", "-loglevel", "error",
+        cmd = [ffmpeg, "-hide_banner", "-loglevel", "error"]
+        if self._seek_seconds > 0:
+            cmd += ["-ss", str(self._seek_seconds)]
+        cmd += [
             "-reconnect", "1", "-reconnect_streamed", "1", "-reconnect_delay_max", "5",
             "-i", url,
             "-vn",

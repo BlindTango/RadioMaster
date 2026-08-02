@@ -34,14 +34,15 @@ class PodcastControls(wx.Panel):
 
         self.rate_label = wx.StaticText(self, label="Rate:")
         accessible_label(self, "Playback rate")
-        # 50-300 maps to 0.5x-3.0x; ffmpeg's atempo filter applies this on
-        # the podcast decode process (see core/player.py) -- it only takes
-        # effect from the start of the next Play/Previous/Next, not live
-        # mid-episode, since changing it would mean restarting the decode
-        # and losing the current playback position.
+        # 50-300 maps to 0.5x-3.0x, via ffmpeg's atempo filter on the podcast
+        # decode process (see core/player.py). Changing it while playing
+        # restarts that decode process at the new rate, seeking back to
+        # roughly the current position (see PodcastPanel._on_rate_committed)
+        # -- there's no way to change atempo on an already-running ffmpeg
+        # process, so a brief restart is unavoidable, but it's a lot better
+        # than the slider silently doing nothing until the next episode.
         self.rate_slider = wx.Slider(self, value=100, minValue=50, maxValue=300, style=wx.SL_HORIZONTAL)
-        self.rate_slider.SetToolTip(
-            "Playback speed — applies the next time you press Play, Previous, or Next")
+        self.rate_slider.SetToolTip("Playback speed — restarts the current episode at the new speed")
         self.rate_value_label = wx.StaticText(self, label="1.0x")
 
         self.pan_label = wx.StaticText(self, label="Pan:")
@@ -74,6 +75,7 @@ class PodcastControls(wx.Panel):
         self.on_next: Optional[Callable[[], None]] = None
         self.on_volume_changed: Optional[Callable[[int], None]] = None
         self.on_rate_changed: Optional[Callable[[float], None]] = None
+        self.on_rate_committed: Optional[Callable[[float], None]] = None
         self.on_pan_changed: Optional[Callable[[int], None]] = None
 
         self.prev_btn.Bind(wx.EVT_BUTTON, lambda e: self.on_previous and self.on_previous())
@@ -82,6 +84,12 @@ class PodcastControls(wx.Panel):
         self.next_btn.Bind(wx.EVT_BUTTON, lambda e: self.on_next and self.on_next())
         self.volume_slider.Bind(wx.EVT_SLIDER, self._on_volume_slider)
         self.rate_slider.Bind(wx.EVT_SLIDER, self._on_rate_slider)
+        # EVT_SLIDER above fires continuously while dragging (just updates the
+        # label) -- EVT_SCROLL_CHANGED fires once the value actually settles
+        # (mouse released, or a single keyboard step), which is the point to
+        # actually restart the decode process at the new rate instead of
+        # doing it on every intermediate tick of a drag.
+        self.rate_slider.Bind(wx.EVT_SCROLL_CHANGED, self._on_rate_committed)
         self.pan_slider.Bind(wx.EVT_SLIDER, self._on_pan_slider)
 
     def _on_volume_slider(self, event: wx.Event) -> None:
@@ -95,6 +103,10 @@ class PodcastControls(wx.Panel):
         self.rate_value_label.SetLabel(f"{rate:.2f}x")
         if self.on_rate_changed:
             self.on_rate_changed(rate)
+
+    def _on_rate_committed(self, event: wx.Event) -> None:
+        if self.on_rate_committed:
+            self.on_rate_committed(self.rate_slider.GetValue() / 100.0)
 
     def _on_pan_slider(self, event: wx.Event) -> None:
         value = self.pan_slider.GetValue()
