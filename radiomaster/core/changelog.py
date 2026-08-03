@@ -8,6 +8,11 @@ on every version bump.
 from __future__ import annotations
 
 CHANGELOG: dict[str, list[str]] = {
+    "1.9.1": [
+        "Fixed podcast episodes cutting off their last few seconds and jumping straight "
+        "to the next episode — playback now waits for all already-decoded audio to "
+        "finish playing before treating an episode as finished.",
+    ],
     "1.9.0": [
         "Redesigned the Global Hotkeys settings dialog: it's now a list you can add to, "
         "edit, and remove from, instead of one fixed text box per action — and each "

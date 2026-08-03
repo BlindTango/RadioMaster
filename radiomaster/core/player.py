@@ -648,12 +648,27 @@ class Player:
             if (not self._stop_event.is_set() and self.state != PlayerState.ERROR
                     and generation == self._decode_generation):
                 if self._expect_eof:
+                    self._wait_for_buffer_drain(buf, generation)
                     self._finish()
                     return
                 threading.Thread(
                     target=log_if_geo_restricted, args=(self.station_name, self.url, self.proxies),
                     daemon=True).start()
                 self._fail("Stream connection lost.")
+
+    def _wait_for_buffer_drain(self, buf: Optional[StreamBuffer], generation: int) -> None:
+        """Decode reaching EOF only means BASS has produced every byte of the
+        episode -- since decode races far ahead of real-time (see the
+        throttle above), the ring buffer can still hold many seconds of
+        audio the output callback hasn't played yet. Firing on_finished
+        (which auto-advances to the next episode) before that drains cuts
+        the tail of the episode off. Block this (non-realtime) reader thread
+        until the buffer is actually empty."""
+        if buf is None:
+            return
+        while (buf.size > 0 and not self._stop_event.is_set()
+               and generation == self._decode_generation):
+            time.sleep(0.05)
 
     def _icy_loop(self, url: str, generation: int, stop_event: threading.Event) -> None:
         def on_title_changed(title: str) -> None:
