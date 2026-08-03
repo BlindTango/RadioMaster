@@ -62,6 +62,18 @@ CREATE TABLE IF NOT EXISTS metadata (
     key TEXT PRIMARY KEY,
     value TEXT
 );
+
+-- Trigram-tokenized index over station names so search_local()'s
+-- "contains anywhere" LIKE lookup doesn't have to scan all ~61,000 rows
+-- on every search — the trigram tokenizer lets SQLite serve a
+-- 'name LIKE %query%' pattern from the index instead (any pattern with at
+-- least 3 literal characters; shorter queries transparently fall back to a
+-- full scan, same as before). Kept as a separate lookup table (uuid ->
+-- name) rather than an external-content table so it can be freely rebuilt
+-- after each catalog sync without touching the main stations table.
+CREATE VIRTUAL TABLE IF NOT EXISTS stations_fts USING fts5(
+    uuid UNINDEXED, name, tokenize='trigram'
+);
 """
 
 _FIELDS = ["uuid", "name", "url", "favicon", "tags", "country", "language",
@@ -95,6 +107,13 @@ class StationDB:
         if "languagecodes" not in columns:
             conn.execute("ALTER TABLE stations ADD COLUMN languagecodes TEXT DEFAULT ''")
         conn.execute("CREATE INDEX IF NOT EXISTS idx_stations_network ON stations(network)")
+
+        # A stations.db written before stations_fts existed has the table
+        # (just created above) but no rows in it yet — backfill once.
+        fts_count = conn.execute("SELECT COUNT(*) FROM stations_fts").fetchone()[0]
+        total = conn.execute("SELECT COUNT(*) FROM stations").fetchone()[0]
+        if fts_count == 0 and total > 0:
+            conn.execute("INSERT INTO stations_fts(uuid, name) SELECT uuid, name FROM stations")
 
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
@@ -154,6 +173,13 @@ class StationDB:
                         "INSERT INTO station_languages (station_uuid, language) VALUES (?, ?)",
                         (station.uuid, iso_language),
                     )
+
+            if changed:
+                # Full rebuild rather than per-row sync — simpler and safe
+                # against renames, and this only runs once per (infrequent)
+                # catalog sync, not per search.
+                cur.execute("DELETE FROM stations_fts")
+                cur.execute("INSERT INTO stations_fts(uuid, name) SELECT uuid, name FROM stations")
 
         self.set_metadata("last_updated", datetime.now().isoformat())
         return changed, unchanged
@@ -290,11 +316,25 @@ class StationDB:
         return self._rows_to_stations(rows)
 
     def search_local(self, query: str, limit: int = 500) -> list[Station]:
+        """Substring search over station names, served from the trigram-
+        indexed stations_fts table instead of a plain 'name LIKE %query%'
+        scan of all ~61,000 rows — the old approach couldn't use any index
+        (a leading '%' wildcard defeats a normal B-tree index), which is why
+        this used to take noticeably long. See SCHEMA's stations_fts comment."""
         with self._connect() as conn:
-            rows = conn.execute(
-                f"""SELECT {_STATION_COLUMNS} FROM stations
-                   WHERE name LIKE ? ORDER BY name COLLATE NOCASE ASC LIMIT ?""",
+            matches = conn.execute(
+                """SELECT uuid FROM stations_fts WHERE name LIKE ?
+                   ORDER BY name COLLATE NOCASE ASC LIMIT ?""",
                 (f"%{query}%", limit),
+            ).fetchall()
+            uuids = [row[0] for row in matches]
+            if not uuids:
+                return []
+            placeholders = ",".join("?" * len(uuids))
+            rows = conn.execute(
+                f"""SELECT {_STATION_COLUMNS} FROM stations WHERE uuid IN ({placeholders})
+                   ORDER BY name COLLATE NOCASE ASC""",
+                uuids,
             ).fetchall()
         return self._rows_to_stations(rows)
 

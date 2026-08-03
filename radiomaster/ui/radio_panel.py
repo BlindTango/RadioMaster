@@ -384,11 +384,18 @@ class RadioPanel(scrolled.ScrolledPanel):
         seq = self._search_seq
 
         def worker():
-            try:
-                results = self.station_api.search(query)
-            except StationAPIError:
-                # Offline or Radio Browser unreachable — fall back to the local DB.
-                results = self.station_db.search_local(query)
+            # The local catalog (synced periodically, ~61,000 stations,
+            # trigram-indexed — see StationDB.search_local) covers the vast
+            # majority of searches and answers near-instantly, unlike the
+            # network call below, which takes a few seconds every time.
+            # Only fall through to Radio Browser itself when nothing local
+            # matches, e.g. a station added since the last catalog sync.
+            results = self.station_db.search_local(query)
+            if not results:
+                try:
+                    results = self.station_api.search(query)
+                except StationAPIError:
+                    pass  # offline/unreachable and no local match either — empty result stands
             if seq != self._search_seq:
                 return  # a newer search superseded this one; discard stale results
             call_after_safe(self, self.tree.set_search_results, results)

@@ -8,6 +8,11 @@ on every version bump.
 from __future__ import annotations
 
 CHANGELOG: dict[str, list[str]] = {
+    "1.9.2": [
+        "Radio station search is now much faster — the local station catalog is indexed for "
+        "instant substring search and is now checked before falling back to a live lookup, "
+        "instead of always waiting on a network round-trip.",
+    ],
     "1.9.1": [
         "Fixed podcast episodes cutting off their last few seconds and jumping straight "
         "to the next episode — playback now waits for all already-decoded audio to "
