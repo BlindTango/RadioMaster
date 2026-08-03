@@ -23,19 +23,20 @@ _DEFAULTS = {
     "ffmpeg_path": None,
     "ffprobe_path": None,
     "window_size": [900, 600],
-    "volume": 1.0,
+    "volume": 0.4,
+    "pan": 0.5,
     "acoustid_api_key": None,
-    "min_track_seconds": 30,
+    "min_track_seconds": 31,
     "station_update_frequency": "weekly",
     "log_level": "info",
-    "auto_play_last_station": False,
+    "auto_play_last_station": True,
     "last_station_uuid": None,
     "last_station_name": None,
     "last_station_url": None,
-    "fade_enabled": False,
-    "fade_ms": 800,
+    "fade_enabled": True,
+    "fade_ms": 500,
     "mute_playback_while_recording": False,
-    "ad_detection_enabled": False,
+    "ad_detection_enabled": True,
     "ad_auto_mute_enabled": True,
     "podcastindex_api_key": None,
     "podcastindex_api_secret": None,
@@ -46,11 +47,20 @@ _DEFAULTS = {
     "skip_update_version": None,
     "last_seen_version": None,
     "hotkeys": {
-        "play_pause": ["Ctrl+Alt+P"],
-        "stop": ["Ctrl+Alt+S"],
-        "record": ["Ctrl+Alt+R"],
-        "volume_up": ["Ctrl+Alt+Up"],
-        "volume_down": ["Ctrl+Alt+Down"],
+        "play_pause": ["Shift+Alt+P"],
+        "stop": ["Shift+Alt+S"],
+        "record": ["Shift+Alt+R"],
+        "volume_up": ["Shift+Alt+Up"],
+        "volume_down": ["Shift+Alt+Down"],
+        "pan_left": ["Shift+Alt+Home"],
+        "pan_right": ["Shift+Alt+End"],
+        "rate_up": ["Shift+Alt+Right"],
+        "rate_down": ["Shift+Alt+Left"],
+        "open_recording_folder": ["Shift+Alt+F"],
+        "open_podcast_folder": ["Shift+Alt+J"],
+        "open_settings": ["Shift+Alt+T"],
+        "open_scheduler": ["Shift+Alt+C"],
+        "help": ["Shift+Alt+H"],
     },
 }
 
@@ -91,7 +101,20 @@ class Config:
                     self._data.update(loaded)
                 except (json.JSONDecodeError, OSError):
                     pass
-            self._data["hotkeys"] = _normalize_hotkeys(self._data.get("hotkeys"))
+            hotkeys = _normalize_hotkeys(self._data.get("hotkeys"))
+            # update() above is a shallow merge, so an existing config.json's
+            # "hotkeys" dict fully replaces the default one rather than being
+            # merged key-by-key. That means an action added to _DEFAULTS
+            # after a user's config.json already existed (e.g. Podcast Rate
+            # Up/Down, Open Recording/Podcast Folder, Open Settings, Open
+            # Recording Scheduler, Open Help) would otherwise stay permanently
+            # unbound and invisible in the Hotkeys dialog's list, which only
+            # shows actions that already have at least one binding. Fill in
+            # any action missing from the loaded file with its default
+            # binding(s) so newly introduced actions actually appear.
+            for action, specs in _DEFAULTS["hotkeys"].items():
+                hotkeys.setdefault(action, list(specs))
+            self._data["hotkeys"] = hotkeys
 
     def save(self) -> None:
         with self._lock:

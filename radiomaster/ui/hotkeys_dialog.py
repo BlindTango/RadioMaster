@@ -23,6 +23,8 @@ ACTIONS = [
     ("record", "Record Selected Station"),
     ("volume_up", "Volume Up"),
     ("volume_down", "Volume Down"),
+    ("pan_left", "Pan Left"),
+    ("pan_right", "Pan Right"),
     ("rate_up", "Podcast Rate Up"),
     ("rate_down", "Podcast Rate Down"),
     ("open_recording_folder", "Open Recording Folder"),

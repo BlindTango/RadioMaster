@@ -81,7 +81,7 @@ class MainFrame(wx.Frame):
             buffer_seconds=self.config.get("buffer_seconds", 30),
             output_device=self.config.get("output_device"),
             proxies=self._proxies(),
-            ad_detection_enabled=self.config.get("ad_detection_enabled", False),
+            ad_detection_enabled=self.config.get("ad_detection_enabled", True),
             ad_auto_mute_enabled=self.config.get("ad_auto_mute_enabled", True),
             connection_retries=self.config.get("connection_retries", 3),
         )
@@ -155,7 +155,7 @@ class MainFrame(wx.Frame):
         # app.py has already called Show()) gives accurate real measurements.
         call_after_safe(self, self._apply_window_size, w, h)
 
-        self.player.set_fade(self.config.get("fade_enabled", False), self.config.get("fade_ms", 800) / 1000)
+        self.player.set_fade(self.config.get("fade_enabled", True), self.config.get("fade_ms", 500) / 1000)
 
         self.hotkeys = GlobalHotkeyManager(self)
         self._register_hotkeys()
@@ -163,7 +163,7 @@ class MainFrame(wx.Frame):
         self.scheduler.start()
         self.station_update_scheduler.start(self.config.get("station_update_frequency", "weekly"))
 
-        if self.config.get("auto_play_last_station", False):
+        if self.config.get("auto_play_last_station", True):
             call_after_safe(self, self._auto_play_last_station)
 
         seen_version = self.config.get("last_seen_version")
@@ -437,6 +437,8 @@ class MainFrame(wx.Frame):
             "record": self.radio_panel.toggle_record_selected,
             "volume_up": lambda: self.radio_panel.volume_step(5),
             "volume_down": lambda: self.radio_panel.volume_step(-5),
+            "pan_left": lambda: self.radio_panel.pan_step(-5),
+            "pan_right": lambda: self.radio_panel.pan_step(5),
             "rate_up": lambda: self.podcast_panel.rate_step(0.1),
             "rate_down": lambda: self.podcast_panel.rate_step(-0.1),
             "open_recording_folder": lambda: self._on_open_recording_folder(None),
@@ -494,8 +496,8 @@ class MainFrame(wx.Frame):
         self.podcast_panel.set_proxies(self._proxies())
         self.podcast_panel.set_podcastindex_credentials(
             self.config.get("podcastindex_api_key"), self.config.get("podcastindex_api_secret"))
-        self.player.set_fade(self.config.get("fade_enabled", False), self.config.get("fade_ms", 800) / 1000)
-        self.player.set_ad_detection_enabled(self.config.get("ad_detection_enabled", False))
+        self.player.set_fade(self.config.get("fade_enabled", True), self.config.get("fade_ms", 500) / 1000)
+        self.player.set_ad_detection_enabled(self.config.get("ad_detection_enabled", True))
         self.player.set_ad_auto_mute_enabled(self.config.get("ad_auto_mute_enabled", True))
         self.player.set_connection_retries(self.config.get("connection_retries", 3))
         self._register_hotkeys()

@@ -8,6 +8,18 @@ on every version bump.
 from __future__ import annotations
 
 CHANGELOG: dict[str, list[str]] = {
+    "1.9.5": [
+        "New-install defaults tuned for typical use: volume 40%, pan centred, minimum "
+        "kept recording length 31 seconds, auto-play the last station on startup, fade "
+        "audio in/out when switching stations (500ms), and advertisement-break detection "
+        "all now on by default.",
+        "All default Global Hotkeys switched to Shift+Alt+ combinations, and every "
+        "hotkey-bindable action (including ones added in 1.9.3, like Podcast Rate Up/ "
+        "Down and Open Settings) now gets a default binding automatically, even for "
+        "existing installs, so they actually show up in the Hotkeys list instead of "
+        "staying invisible until manually added.",
+        "Added Pan Left/Pan Right to the list of actions Global Hotkeys can control.",
+    ],
     "1.9.4": [
         "Fixed dialogs opening with focus on the OK/Close button instead of the first "
         "real field — Effects, Help, Hotkeys (both the list and the add/edit form), "

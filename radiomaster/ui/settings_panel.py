@@ -104,7 +104,7 @@ class SettingsPanel(scrolled.ScrolledPanel):
         self.format_choice.SetSelection(FORMATS.index(current_fmt) if current_fmt in FORMATS else 0)
 
         accessible_label(self, "Minimum track length to keep when recording, in seconds")
-        self.min_track_seconds_ctrl = wx.SpinCtrl(self, min=0, max=600, initial=config.get("min_track_seconds", 30))
+        self.min_track_seconds_ctrl = wx.SpinCtrl(self, min=0, max=600, initial=config.get("min_track_seconds", 31))
 
         accessible_label(self, "Theme")
         self.theme_choice = wx.Choice(self, choices=THEMES)
@@ -134,12 +134,12 @@ class SettingsPanel(scrolled.ScrolledPanel):
             LOG_LEVELS.index(current_log_level) if current_log_level in LOG_LEVELS else LOG_LEVELS.index("info"))
 
         self.auto_play_check = wx.CheckBox(self, label="&Play the last station automatically on startup")
-        self.auto_play_check.SetValue(config.get("auto_play_last_station", False))
+        self.auto_play_check.SetValue(config.get("auto_play_last_station", True))
 
         self.fade_check = wx.CheckBox(self, label="&Fade audio in/out when switching stations")
-        self.fade_check.SetValue(config.get("fade_enabled", False))
+        self.fade_check.SetValue(config.get("fade_enabled", True))
         accessible_label(self, "Fade duration in milliseconds")
-        self.fade_ms_ctrl = wx.SpinCtrl(self, min=100, max=5000, initial=config.get("fade_ms", 800))
+        self.fade_ms_ctrl = wx.SpinCtrl(self, min=100, max=5000, initial=config.get("fade_ms", 500))
 
         self.mute_while_recording_check = wx.CheckBox(
             self, label="&Mute live playback while recording (recording is unaffected)")
@@ -147,7 +147,7 @@ class SettingsPanel(scrolled.ScrolledPanel):
 
         self.ad_detection_check = wx.CheckBox(
             self, label="Detect and flag likely &advertisement breaks (experimental)")
-        self.ad_detection_check.SetValue(config.get("ad_detection_enabled", False))
+        self.ad_detection_check.SetValue(config.get("ad_detection_enabled", True))
         self.ad_auto_mute_check = wx.CheckBox(
             self, label="Automatically m&ute audio during a detected ad break")
         self.ad_auto_mute_check.SetValue(config.get("ad_auto_mute_enabled", True))

@@ -282,7 +282,7 @@ class RadioPanel(scrolled.ScrolledPanel):
         self.controls.on_volume_changed = self._on_volume_changed
         self.controls.on_pan_changed = self._on_pan_changed
 
-        saved_volume = int(round(self.config.get("volume", 1.0) * 100))
+        saved_volume = int(round(self.config.get("volume", 0.4) * 100))
         self.controls.set_volume(saved_volume)
         self.player.set_volume(saved_volume / 100)
 
@@ -497,6 +497,11 @@ class RadioPanel(scrolled.ScrolledPanel):
         new_percent = max(0, min(100, self.controls.volume_slider.GetValue() + delta_percent))
         self.controls.set_volume(new_percent)
         self._on_volume_changed(new_percent)
+
+    def pan_step(self, delta_percent: int) -> None:
+        new_percent = max(0, min(100, self.controls.pan_slider.GetValue() + delta_percent))
+        self.controls.set_pan(new_percent)
+        self._on_pan_changed(new_percent)
 
     def _on_record(self) -> None:
         """Record button acts on the station currently SELECTED in the tree —

@@ -129,11 +129,11 @@ TOPICS: list[tuple[str, str]] = [
     ("Global Hotkeys", (
         "Tools > Settings... > Configure Global Hotkeys lets you assign system-wide key "
         "combinations to: Play/Pause, Stop, Record Selected Station, Volume Up, Volume "
-        "Down, Podcast Rate Up, Podcast Rate Down, Open Recording Folder, Open Podcast "
-        "Folder, Open Settings, Open Recording Scheduler, and Open Help — these work "
-        "even when RadioMaster isn't the focused window.\n\n"
+        "Down, Pan Left, Pan Right, Podcast Rate Up, Podcast Rate Down, Open Recording "
+        "Folder, Open Podcast Folder, Open Settings, Open Recording Scheduler, and Open "
+        "Help — these work even when RadioMaster isn't the focused window.\n\n"
         "Press Add..., choose a feature from the list, then the key combination you "
-        "want — e.g. Ctrl+Alt+P. A feature can have more than one binding (say, a "
+        "want — e.g. Shift+Alt+P. A feature can have more than one binding (say, a "
         "letter combo and a multimedia key); select an existing binding and press "
         "Edit... or Remove to change it."
     )),
