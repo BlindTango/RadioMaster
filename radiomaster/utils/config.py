@@ -11,6 +11,7 @@ log = logging.getLogger(__name__)
 
 _DEFAULTS = {
     "buffer_seconds": 30,
+    "connection_retries": 3,
     "output_device": None,
     "vpn_proxy": None,
     "vpn_enabled": False,

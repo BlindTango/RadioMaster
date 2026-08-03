@@ -65,14 +65,22 @@ class StreamInfo:
 class Player:
     """One station at a time; call stop() before start()-ing a new one."""
 
+    # Pause between BASS_StreamCreateURL retry attempts (see
+    # _spawn_decode_channel) -- long enough to give a slow/flaky connection a
+    # real chance to recover, short enough that a genuinely dead station
+    # still fails within a few seconds even at the max retry count.
+    _RETRY_DELAY_SECONDS = 1.5
+
     def __init__(self, buffer_seconds: int = 30, output_device: Optional[int] = None,
                  proxies: Optional[dict] = None, ffmpeg_path: Optional[str] = None,
                  ffprobe_path: Optional[str] = None,
                  ad_detection_enabled: bool = False, ad_auto_mute_enabled: bool = True,
-                 ad_fingerprint_store: Optional[AdFingerprintStore] = None):
+                 ad_fingerprint_store: Optional[AdFingerprintStore] = None,
+                 connection_retries: int = 3):
         self.buffer_seconds = buffer_seconds
         self.output_device = output_device
         self.proxies = proxies
+        self.connection_retries = connection_retries
         self._ffmpeg = ffmpeg_path
         self._ffprobe = ffprobe_path
 
@@ -205,7 +213,7 @@ class Player:
             daemon=True).start()
 
     def _connect_and_crossfade(self, url: str, generation: int, station_generation: int) -> None:
-        new_channel = self._spawn_decode_channel(url)
+        new_channel = self._spawn_decode_channel(url, generation)
         if new_channel is None:
             return
         if generation != self._decode_generation or self._stop_event.is_set():
@@ -307,7 +315,7 @@ class Player:
             target=self._connect_and_read, args=(url, generation, station_generation), daemon=True).start()
 
     def _connect_and_read(self, url: str, generation: int, station_generation: int) -> None:
-        channel = self._spawn_decode_channel(url)
+        channel = self._spawn_decode_channel(url, generation)
         if channel is None:
             return
         if generation != self._decode_generation or self._stop_event.is_set():
@@ -352,7 +360,7 @@ class Player:
             target=self._icy_loop, args=(url, generation, stop_event), daemon=True)
         self._icy_thread.start()
 
-    def _spawn_decode_channel(self, url: str) -> Optional[BassDecodeChannel]:
+    def _spawn_decode_channel(self, url: str, generation: Optional[int] = None) -> Optional[BassDecodeChannel]:
         """Opens `url` as a BASS decode-only channel, normalized to
         SAMPLE_RATE/CHANNELS through a private BASSmix mixer regardless of
         the source's native format. Audio effects are applied afterwards,
@@ -365,12 +373,33 @@ class Player:
         on-demand (expect_eof=True) sources, since live radio has no
         well-defined "speed". self._seek_seconds (also podcast-only) seeks
         the channel to that position immediately after it's created, so a
-        rate/seek change doesn't sound like starting over from 0."""
-        try:
-            channel = BassDecodeChannel(
-                url, samplerate=SAMPLE_RATE, channels=CHANNELS, enable_tempo=self._expect_eof)
-        except BassError as exc:
-            self._fail(f"Failed to open stream: {exc}")
+        rate/seek change doesn't sound like starting over from 0.
+
+        A slow/flaky connection can fail BASS_StreamCreateURL on the first
+        try and succeed a moment later, so this retries up to
+        self.connection_retries additional times (configurable in Settings)
+        before giving up -- generation is checked before each attempt so a
+        station switch/stop mid-retry abandons the stale attempt instead of
+        wasting time on a connection nobody wants anymore."""
+        attempts = max(0, self.connection_retries) + 1
+        channel: Optional[BassDecodeChannel] = None
+        last_exc: Optional[BassError] = None
+        for attempt in range(attempts):
+            if self._stop_event.is_set() or (generation is not None and generation != self._decode_generation):
+                return None
+            try:
+                channel = BassDecodeChannel(
+                    url, samplerate=SAMPLE_RATE, channels=CHANNELS, enable_tempo=self._expect_eof)
+                last_exc = None
+                break
+            except BassError as exc:
+                last_exc = exc
+                if attempt < attempts - 1:
+                    log.warning("Stream connect attempt %d/%d failed for %s: %s",
+                                attempt + 1, attempts, url, exc)
+                    self._stop_event.wait(self._RETRY_DELAY_SECONDS)
+        if channel is None:
+            self._fail(f"Failed to open stream: {last_exc}")
             return None
         if self._expect_eof:
             if abs(self._rate - 1.0) > 1e-3:
@@ -765,6 +794,9 @@ class Player:
     def set_ad_auto_mute_enabled(self, enabled: bool) -> None:
         self.ad_auto_mute_enabled = enabled
         self._ad_muted = self._ad_flagged and enabled
+
+    def set_connection_retries(self, count: int) -> None:
+        self.connection_retries = max(0, count)
 
     def _probe_loop(self, url: str, generation: int) -> None:
         ffprobe = self._ffprobe or find_ffprobe()

@@ -175,10 +175,17 @@ class BassDecodeChannel:
         self._raw = 0
         self._source = 0
         self._mixer = 0
+        self._last_url_error = 0
 
         raw = self._create_url_stream(url)
         if not raw:
-            raise BassError(f"BASS_StreamCreateURL failed (err={_error(self._bass)})")
+            # NOT _error(self._bass) here -- any BASS call made after the
+            # failing BASS_StreamCreateURL (even a harmless BASS_SetConfig)
+            # resets the thread's last-error to BASS_OK (0) before this line
+            # runs, which is how this used to always report "err=0" no
+            # matter what actually went wrong. _last_url_error is captured
+            # immediately after each failed attempt inside _create_url_stream.
+            raise BassError(f"BASS_StreamCreateURL failed (err={self._last_url_error})")
         self._raw = raw
 
         source = raw
@@ -207,27 +214,27 @@ class BassDecodeChannel:
     def _create_url_stream(self, url: str) -> int:
         """Mirrors the fallback chain a known-working BASS integration uses
         for the same station catalogue: try with BASS_STREAM_BLOCK first
-        (buffers the whole file up front for on-demand content), fall back
-        without it (needed for some live streams that never report a
-        length), and as a last resort retry with SSL verification disabled
-        for https:// sources whose certificate chains BASS itself can't
-        validate even though a browser/ffmpeg would accept them."""
+        (buffers the whole file up front for on-demand content), then fall
+        back without it (needed for some live streams that never report a
+        length). SSL certificate verification is already disabled globally
+        in ensure_initialized() (BASS_CONFIG_NET_SSL_VERIFY, 0), so a third
+        'retry with SSL verify off' attempt used to sit here too -- it was
+        identical to the second attempt in every way and its only real
+        effect was clobbering the real error code (the BASS_SetConfig calls
+        around it reset BASS's last-error to BASS_OK before __init__ could
+        read it), which is why every failure used to get misreported as
+        err=0. Removed; self._last_url_error now captures the real code
+        from whichever attempt actually failed, for __init__ to report."""
         encoded = url.encode("utf-8")
         flags = BASS_STREAM_DECODE | BASS_STREAM_BLOCK
         handle = self._bass.BASS_StreamCreateURL(encoded, 0, flags, None, None)
         if handle:
             return handle
+        self._last_url_error = _error(self._bass)
         handle = self._bass.BASS_StreamCreateURL(encoded, 0, BASS_STREAM_DECODE, None, None)
         if handle:
             return handle
-        if url.lower().startswith("https://"):
-            saved = self._bass.BASS_GetConfig(BASS_CONFIG_NET_SSL_VERIFY) if hasattr(self._bass, "BASS_GetConfig") else None
-            self._bass.BASS_SetConfig(BASS_CONFIG_NET_SSL_VERIFY, 0)
-            handle = self._bass.BASS_StreamCreateURL(encoded, 0, BASS_STREAM_DECODE, None, None)
-            if saved is not None:
-                self._bass.BASS_SetConfig(BASS_CONFIG_NET_SSL_VERIFY, saved)
-            if handle:
-                return handle
+        self._last_url_error = _error(self._bass)
         return 0
 
     def read(self, n_bytes: int) -> bytes:

@@ -64,6 +64,12 @@ class SettingsPanel(scrolled.ScrolledPanel):
         accessible_label(self, "Stream buffer size in seconds")
         self.buffer_ctrl = wx.SpinCtrl(self, min=10, max=300, initial=config.get("buffer_seconds", 30))
 
+        accessible_label(self, "Connection retry attempts")
+        self.connection_retries_ctrl = wx.SpinCtrl(self, min=0, max=10, initial=config.get("connection_retries", 3))
+        self.connection_retries_ctrl.SetToolTip(
+            "How many extra times to try connecting to a station/podcast before giving up, "
+            "useful on a slow or flaky connection")
+
         self.vpn_enabled_check = wx.CheckBox(self, label="Route traffic through a &proxy (VPN)")
         accessible_label(self, "Proxy URL")
         self.vpn_proxy_ctrl = wx.TextCtrl(self, value=config.get("vpn_proxy") or "")
@@ -165,6 +171,7 @@ class SettingsPanel(scrolled.ScrolledPanel):
         outer = wx.BoxSizer(wx.VERTICAL)
         outer.Add(row("&Soundcard:", self.device_choice), 0, wx.EXPAND | wx.ALL, 6)
         outer.Add(row("&Buffer (seconds):", self.buffer_ctrl), 0, wx.EXPAND | wx.ALL, 6)
+        outer.Add(row("Connection re&try attempts:", self.connection_retries_ctrl), 0, wx.EXPAND | wx.ALL, 6)
         outer.Add(self.vpn_enabled_check, 0, wx.ALL, 6)
         outer.Add(row("Proxy &URL:", self.vpn_proxy_ctrl), 0, wx.EXPAND | wx.ALL, 6)
         outer.Add(row("FF&mpeg path:", self.ffmpeg_path_ctrl, self.ffmpeg_browse_btn), 0, wx.EXPAND | wx.ALL, 6)
@@ -291,6 +298,7 @@ class SettingsPanel(scrolled.ScrolledPanel):
         device_index = None if idx <= 0 else self.devices[idx - 1].index
         self.config.set("output_device", device_index, save=False)
         self.config.set("buffer_seconds", self.buffer_ctrl.GetValue(), save=False)
+        self.config.set("connection_retries", self.connection_retries_ctrl.GetValue(), save=False)
         self.config.set("vpn_enabled", self.vpn_enabled_check.GetValue(), save=False)
         self.config.set("vpn_proxy", self.vpn_proxy_ctrl.GetValue().strip() or None, save=False)
         self.config.set("ffmpeg_path", self.ffmpeg_path_ctrl.GetValue().strip() or None, save=False)

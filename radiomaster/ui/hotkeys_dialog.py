@@ -23,6 +23,13 @@ ACTIONS = [
     ("record", "Record Selected Station"),
     ("volume_up", "Volume Up"),
     ("volume_down", "Volume Down"),
+    ("rate_up", "Podcast Rate Up"),
+    ("rate_down", "Podcast Rate Down"),
+    ("open_recording_folder", "Open Recording Folder"),
+    ("open_podcast_folder", "Open Podcast Folder"),
+    ("open_settings", "Open Settings"),
+    ("open_scheduler", "Open Recording Scheduler"),
+    ("help", "Open Help"),
 ]
 _ACTION_LABELS = {key: label for key, label in ACTIONS}
 

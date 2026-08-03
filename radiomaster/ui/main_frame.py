@@ -83,6 +83,7 @@ class MainFrame(wx.Frame):
             proxies=self._proxies(),
             ad_detection_enabled=self.config.get("ad_detection_enabled", False),
             ad_auto_mute_enabled=self.config.get("ad_auto_mute_enabled", True),
+            connection_retries=self.config.get("connection_retries", 3),
         )
         self.effects_presets = EffectsPresetStore()
         self.effects_state = EffectsStateStore()
@@ -436,6 +437,13 @@ class MainFrame(wx.Frame):
             "record": self.radio_panel.toggle_record_selected,
             "volume_up": lambda: self.radio_panel.volume_step(5),
             "volume_down": lambda: self.radio_panel.volume_step(-5),
+            "rate_up": lambda: self.podcast_panel.rate_step(0.1),
+            "rate_down": lambda: self.podcast_panel.rate_step(-0.1),
+            "open_recording_folder": lambda: self._on_open_recording_folder(None),
+            "open_podcast_folder": lambda: self._on_open_podcast_folder(None),
+            "open_settings": lambda: self._on_open_settings(None),
+            "open_scheduler": lambda: self._on_open_scheduler(None),
+            "help": lambda: self._on_help(None),
         }
         warnings = self.hotkeys.register_all(hotkeys, handlers)
         for warning in warnings:
@@ -489,6 +497,7 @@ class MainFrame(wx.Frame):
         self.player.set_fade(self.config.get("fade_enabled", False), self.config.get("fade_ms", 800) / 1000)
         self.player.set_ad_detection_enabled(self.config.get("ad_detection_enabled", False))
         self.player.set_ad_auto_mute_enabled(self.config.get("ad_auto_mute_enabled", True))
+        self.player.set_connection_retries(self.config.get("connection_retries", 3))
         self._register_hotkeys()
 
     def _on_schedule_trigger(self, sched: Schedule) -> None:

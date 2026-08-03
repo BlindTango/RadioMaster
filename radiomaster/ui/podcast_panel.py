@@ -474,6 +474,14 @@ class PodcastPanel(scrolled.ScrolledPanel):
         self.player.set_pan(percent / 100)
         self.config.set("podcast_pan", percent / 100)
 
+    # ---- global hotkey entry points -------------------------------------------
+
+    def rate_step(self, delta: float) -> None:
+        new_rate = max(0.5, min(3.0, self.controls.rate_slider.GetValue() / 100.0 + delta))
+        self.controls.set_rate(new_rate)
+        self._on_rate_changed(new_rate)
+        self._on_rate_committed(new_rate)
+
     # ---- player event callbacks (invoked off the UI thread) -------------------
 
     def _on_player_state(self, state: PlayerState) -> None:

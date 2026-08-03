@@ -8,6 +8,20 @@ on every version bump.
 from __future__ import annotations
 
 CHANGELOG: dict[str, list[str]] = {
+    "1.9.3": [
+        "Fixed a regression where a failed stream connection always reported "
+        "\"BASS_StreamCreateURL failed (err=0)\" regardless of the actual cause, "
+        "making it impossible to tell what went wrong.",
+        "Added a Connection retry attempts setting: on a slow or flaky connection, "
+        "RadioMaster now retries opening a station or podcast stream a configurable "
+        "number of times before giving up, instead of failing on the first attempt.",
+        "Global Hotkeys can now also be bound to Podcast Rate Up/Down, Open Recording "
+        "Folder, Open Podcast Folder, Open Settings, Open Recording Scheduler, and "
+        "Open Help, in addition to the existing Play/Pause, Stop, Record, and Volume "
+        "actions.",
+        "Updated the Help Contents to document the new connection retry setting and "
+        "the expanded list of global hotkey actions.",
+    ],
     "1.9.2": [
         "Radio station search is now much faster — the local station catalog is indexed for "
         "instant substring search and is now checked before falling back to a live lookup, "
