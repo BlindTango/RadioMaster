@@ -233,6 +233,15 @@ class EffectsSettingsDialog(wx.Dialog):
 
         close_btn.Bind(wx.EVT_BUTTON, self._on_close_request)
         self.Bind(wx.EVT_CLOSE, self._on_close_request)
+        # wx focuses the dialog's default button once ShowModal() starts,
+        # overriding a plain SetFocus() called here in __init__ -- binding
+        # EVT_INIT_DIALOG (fired after that default-button focusing) is what
+        # reliably lands focus on the first real control instead.
+        self.Bind(wx.EVT_INIT_DIALOG, self._on_init_dialog)
+
+    def _on_init_dialog(self, event: wx.InitDialogEvent) -> None:
+        event.Skip()
+        self.notebook.SetFocus()
 
     def _on_close_request(self, event: wx.Event) -> None:
         for page in self.pages.values():

@@ -202,6 +202,13 @@ class HelpDialog(wx.Dialog):
 
         self.topic_list.SetSelection(0)
         self._show_topic(0)
+        # A plain SetFocus() here gets overridden once ShowModal() gives the
+        # default (Close) button initial focus -- EVT_INIT_DIALOG fires after
+        # that, so setting focus there sticks. See AddCustomStationDialog.
+        self.Bind(wx.EVT_INIT_DIALOG, self._on_init_dialog)
+
+    def _on_init_dialog(self, event: wx.InitDialogEvent) -> None:
+        event.Skip()
         self.topic_list.SetFocus()
 
     def _on_topic_selected(self, event: wx.CommandEvent) -> None:

@@ -22,6 +22,7 @@ from ..core.station_api import Station, StationAPI, StationAPIError
 from ..core.station_db import StationDB
 from ..core.station_updater import StationUpdater
 from ..utils.config import Config
+from ..utils.accessibility import context_menu_pos
 from ..utils.wx_safe import call_after_safe
 from .widgets.lyrics_panel import LyricsPanel
 from .widgets.now_playing import NowPlayingPanel, format_status
@@ -272,6 +273,7 @@ class RadioPanel(scrolled.ScrolledPanel):
         self.favourite_btn.Bind(wx.EVT_BUTTON, self._on_save_favourite)
         self.tree.on_station_activated = self._on_station_activated
         self.tree.on_selection_changed = self._on_tree_sel_changed
+        self.tree.station_list.Bind(wx.EVT_CONTEXT_MENU, self._on_station_context_menu)
 
         self.controls.on_play = self._on_play_pause
         self.controls.on_stop = self._on_stop
@@ -587,6 +589,23 @@ class RadioPanel(scrolled.ScrolledPanel):
             return
         self.favourites.add(station)
         self.set_status(f"Status: '{station.name}' saved to Favourites")
+
+    def _on_station_context_menu(self, event: wx.ContextMenuEvent) -> None:
+        station = self.tree.get_selected_station()
+        if station is None:
+            return
+        menu = wx.Menu()
+        play_item = menu.Append(wx.ID_ANY, "&Play/Pause")
+        record_label = (
+            "&Stop Recording" if station.uuid in self.active_recordings else "&Record Selected Station"
+        )
+        record_item = menu.Append(wx.ID_ANY, record_label)
+        favourite_item = menu.Append(wx.ID_ANY, "Save to &Favourites")
+        self.Bind(wx.EVT_MENU, lambda e: self._on_play_pause(), play_item)
+        self.Bind(wx.EVT_MENU, lambda e: self._on_record(), record_item)
+        self.Bind(wx.EVT_MENU, self._on_save_favourite, favourite_item)
+        self.tree.station_list.PopupMenu(menu, context_menu_pos(self.tree.station_list, event))
+        menu.Destroy()
 
     # ---- player event callbacks (invoked off the UI thread) -------------------
 

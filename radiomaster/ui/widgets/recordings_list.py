@@ -6,6 +6,7 @@ from typing import Callable, Optional
 
 import wx
 
+from ...utils.accessibility import context_menu_pos
 
 
 def _format_elapsed(seconds: float) -> str:
@@ -37,6 +38,7 @@ class RecordingsList(wx.Panel):
         self.on_stop_requested: Optional[Callable[[str], None]] = None
         self.stop_btn.Bind(wx.EVT_BUTTON, self._on_stop_click)
         self.list_ctrl.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_stop_click)
+        self.list_ctrl.Bind(wx.EVT_CONTEXT_MENU, self._on_context_menu)
 
         self._keys_by_row: list[str] = []
 
@@ -58,6 +60,15 @@ class RecordingsList(wx.Panel):
         if idx == -1 or idx >= len(self._keys_by_row):
             return None
         return self._keys_by_row[idx]
+
+    def _on_context_menu(self, event: wx.ContextMenuEvent) -> None:
+        if self._selected_key() is None:
+            return
+        menu = wx.Menu()
+        stop_item = menu.Append(wx.ID_ANY, "Stop &Selected Recording")
+        self.Bind(wx.EVT_MENU, self._on_stop_click, stop_item)
+        self.list_ctrl.PopupMenu(menu, context_menu_pos(self.list_ctrl, event))
+        menu.Destroy()
 
     def _on_stop_click(self, event) -> None:
         key = self._selected_key()

@@ -8,6 +8,18 @@ on every version bump.
 from __future__ import annotations
 
 CHANGELOG: dict[str, list[str]] = {
+    "1.9.4": [
+        "Fixed dialogs opening with focus on the OK/Close button instead of the first "
+        "real field — Effects, Help, Hotkeys (both the list and the add/edit form), "
+        "Recording Scheduler, Settings, Update Available, and What's New now all put "
+        "keyboard focus where you'd actually expect it as soon as they open.",
+        "Added right-click / context menus (also reachable via the Applications key or "
+        "Shift+F10) to every actionable list in the app: the station browser (Play/"
+        "Pause, Record, Save to Favourites), Favourites (Play, Remove, Move Up/Down), "
+        "Active Recordings (Stop Selected Recording), the Recording Scheduler (Enable/"
+        "Disable, Delete), Global Hotkeys (Add, Edit, Remove), and Podcasts (Subscribe, "
+        "Unsubscribe, Play Episode).",
+    ],
     "1.9.3": [
         "Fixed a regression where a failed stream connection always reported "
         "\"BASS_StreamCreateURL failed (err=0)\" regardless of the actual cause, "

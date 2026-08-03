@@ -8,7 +8,7 @@ import wx
 
 from ..core.favourites import FavouritesStore
 from ..core.station_api import Station
-from ..utils.accessibility import accessible_label
+from ..utils.accessibility import accessible_label, context_menu_pos
 
 
 class FavouritesPanel(wx.Panel):
@@ -38,6 +38,7 @@ class FavouritesPanel(wx.Panel):
         self.SetSizer(outer)
 
         self.list_ctrl.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_activate)
+        self.list_ctrl.Bind(wx.EVT_CONTEXT_MENU, self._on_context_menu)
         self.play_btn.Bind(wx.EVT_BUTTON, self._on_play_click)
         self.remove_btn.Bind(wx.EVT_BUTTON, self._on_remove)
         self.up_btn.Bind(wx.EVT_BUTTON, lambda e: self._move(-1))
@@ -66,6 +67,21 @@ class FavouritesPanel(wx.Panel):
         station = self._selected_station()
         if station:
             self.on_play(station)
+
+    def _on_context_menu(self, event: wx.ContextMenuEvent) -> None:
+        if self._selected_station() is None:
+            return
+        menu = wx.Menu()
+        play_item = menu.Append(wx.ID_ANY, "&Play")
+        remove_item = menu.Append(wx.ID_ANY, "&Remove")
+        up_item = menu.Append(wx.ID_ANY, "Move &Up")
+        down_item = menu.Append(wx.ID_ANY, "Move &Down")
+        self.Bind(wx.EVT_MENU, self._on_play_click, play_item)
+        self.Bind(wx.EVT_MENU, self._on_remove, remove_item)
+        self.Bind(wx.EVT_MENU, lambda e: self._move(-1), up_item)
+        self.Bind(wx.EVT_MENU, lambda e: self._move(1), down_item)
+        self.list_ctrl.PopupMenu(menu, context_menu_pos(self.list_ctrl, event))
+        menu.Destroy()
 
     def _on_play_click(self, event: wx.CommandEvent) -> None:
         station = self._selected_station()

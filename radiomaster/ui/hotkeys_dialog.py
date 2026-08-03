@@ -14,7 +14,7 @@ import wx
 from ..core.hotkeys import (
     AVAILABLE_KEYS, MODIFIERS, build_hotkey_spec, parse_hotkey, split_hotkey_parts,
 )
-from ..utils.accessibility import accessible_label
+from ..utils.accessibility import accessible_label, context_menu_pos
 from ..utils.config import Config
 
 ACTIONS = [
@@ -99,6 +99,11 @@ class HotkeyEditDialog(wx.Dialog):
         self.SetSizerAndFit(outer)
 
         self.FindWindowById(wx.ID_OK, self).Bind(wx.EVT_BUTTON, self._on_ok)
+        self.Bind(wx.EVT_INIT_DIALOG, self._on_init_dialog)
+
+    def _on_init_dialog(self, event: wx.InitDialogEvent) -> None:
+        event.Skip()
+        self.action_choice.SetFocus()
 
     def _on_ok(self, event: wx.CommandEvent) -> None:
         key_index = self.key_listbox.GetSelection()
@@ -171,10 +176,16 @@ class HotkeysDialog(wx.Dialog):
         self.list_ctrl.Bind(wx.EVT_LIST_ITEM_SELECTED, self._update_button_states)
         self.list_ctrl.Bind(wx.EVT_LIST_ITEM_DESELECTED, self._update_button_states)
         self.list_ctrl.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_edit)
+        self.list_ctrl.Bind(wx.EVT_CONTEXT_MENU, self._on_context_menu)
         self.FindWindowById(wx.ID_OK, self).Bind(wx.EVT_BUTTON, self._on_ok)
+        self.Bind(wx.EVT_INIT_DIALOG, self._on_init_dialog)
 
         self._refresh_list()
         self._update_button_states(None)
+
+    def _on_init_dialog(self, event: wx.InitDialogEvent) -> None:
+        event.Skip()
+        self.list_ctrl.SetFocus()
 
     def _refresh_list(self, select_row: Optional[int] = None) -> None:
         self._rows = [
@@ -211,6 +222,18 @@ class HotkeysDialog(wx.Dialog):
             self._hotkeys.setdefault(dlg.action_key, []).append(dlg.spec)
             self._refresh_list(select_row=len(self._rows))
         dlg.Destroy()
+
+    def _on_context_menu(self, event: wx.ContextMenuEvent) -> None:
+        menu = wx.Menu()
+        add_item = menu.Append(wx.ID_ANY, "&Add...")
+        self.Bind(wx.EVT_MENU, self._on_add, add_item)
+        if self._selected_row() is not None:
+            edit_item = menu.Append(wx.ID_ANY, "&Edit...")
+            remove_item = menu.Append(wx.ID_ANY, "&Remove")
+            self.Bind(wx.EVT_MENU, self._on_edit, edit_item)
+            self.Bind(wx.EVT_MENU, self._on_remove, remove_item)
+        self.list_ctrl.PopupMenu(menu, context_menu_pos(self.list_ctrl, event))
+        menu.Destroy()
 
     def _on_edit(self, event) -> None:
         row = self._selected_row()

@@ -14,7 +14,7 @@ from ..core.scheduler import (
     Schedule, ScheduleStore, RecordingScheduler, WEEKDAY_NAMES, find_conflicts, new_schedule_id,
 )
 from ..core.station_api import Station
-from ..utils.accessibility import accessible_label
+from ..utils.accessibility import accessible_label, context_menu_pos
 
 SCHEDULE_TYPES = ["One-time", "Daily", "Weekly", "Nth weekday of month", "Custom interval"]
 ORDINALS = ["1st", "2nd", "3rd", "4th", "Last"]
@@ -233,6 +233,7 @@ class SchedulerPanel(wx.Panel):
         self.form.save_btn.Bind(wx.EVT_BUTTON, self._on_save)
         self.delete_btn.Bind(wx.EVT_BUTTON, self._on_delete)
         self.toggle_btn.Bind(wx.EVT_BUTTON, self._on_toggle)
+        self.list_ctrl.Bind(wx.EVT_CONTEXT_MENU, self._on_context_menu)
 
         self.refresh()
 
@@ -249,6 +250,17 @@ class SchedulerPanel(wx.Panel):
         if idx == -1 or idx >= len(all_scheds):
             return None
         return all_scheds[idx]
+
+    def _on_context_menu(self, event: wx.ContextMenuEvent) -> None:
+        if self._selected_schedule() is None:
+            return
+        menu = wx.Menu()
+        toggle_item = menu.Append(wx.ID_ANY, "&Enable/Disable")
+        delete_item = menu.Append(wx.ID_ANY, "&Delete")
+        self.Bind(wx.EVT_MENU, self._on_toggle, toggle_item)
+        self.Bind(wx.EVT_MENU, self._on_delete, delete_item)
+        self.list_ctrl.PopupMenu(menu, context_menu_pos(self.list_ctrl, event))
+        menu.Destroy()
 
     def _on_save(self, event: wx.CommandEvent) -> None:
         sched = self.form.build_schedule()
@@ -303,3 +315,8 @@ class SchedulerDialog(wx.Dialog):
 
         close_btn.Bind(wx.EVT_BUTTON, lambda e: self.EndModal(wx.ID_CLOSE))
         self.Bind(wx.EVT_CLOSE, lambda e: self.EndModal(wx.ID_CLOSE))
+        self.Bind(wx.EVT_INIT_DIALOG, self._on_init_dialog)
+
+    def _on_init_dialog(self, event: wx.InitDialogEvent) -> None:
+        event.Skip()
+        self.panel.list_ctrl.SetFocus()

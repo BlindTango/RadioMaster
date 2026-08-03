@@ -364,3 +364,8 @@ class SettingsDialog(wx.Dialog):
 
         close_btn.Bind(wx.EVT_BUTTON, lambda e: self.EndModal(wx.ID_CLOSE))
         self.Bind(wx.EVT_CLOSE, lambda e: self.EndModal(wx.ID_CLOSE))
+        self.Bind(wx.EVT_INIT_DIALOG, self._on_init_dialog)
+
+    def _on_init_dialog(self, event: wx.InitDialogEvent) -> None:
+        event.Skip()
+        self.panel.device_choice.SetFocus()

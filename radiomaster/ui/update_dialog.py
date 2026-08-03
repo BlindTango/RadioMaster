@@ -71,7 +71,10 @@ class UpdateAvailableDialog(wx.Dialog):
         skip_btn.Bind(wx.EVT_BUTTON, self._on_skip)
         later_btn.Bind(wx.EVT_BUTTON, lambda e: self.EndModal(wx.ID_CANCEL))
         self.Bind(wx.EVT_CLOSE, self._on_close)
+        self.Bind(wx.EVT_INIT_DIALOG, self._on_init_dialog)
 
+    def _on_init_dialog(self, event: wx.InitDialogEvent) -> None:
+        event.Skip()
         self.download_btn.SetFocus()
 
     def _on_view_github(self, event: wx.CommandEvent) -> None:

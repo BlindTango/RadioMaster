@@ -25,7 +25,7 @@ from ..core.podcast_api import (
     PodcastResult, fetch_episodes, fetch_feed_metadata, search_all,
 )
 from ..core.podcast_subscriptions import PodcastSubscriptionsStore
-from ..utils.accessibility import accessible_label
+from ..utils.accessibility import accessible_label, context_menu_pos
 from ..utils.config import Config
 from ..utils.wx_safe import call_after_safe
 from .widgets.now_playing import NowPlayingPanel, ReadOnlyFocusableTextCtrl
@@ -135,11 +135,14 @@ class PodcastPanel(scrolled.ScrolledPanel):
         self.search_btn.Bind(wx.EVT_BUTTON, self._on_search)
         self.search_ctrl.Bind(wx.EVT_TEXT_ENTER, self._on_search)
         self.results_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, lambda e: self._on_subscribe(e))
+        self.results_list.Bind(wx.EVT_CONTEXT_MENU, self._on_results_context_menu)
         self.subscribe_btn.Bind(wx.EVT_BUTTON, self._on_subscribe)
         self.subs_list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_subs_sel_changed)
+        self.subs_list.Bind(wx.EVT_CONTEXT_MENU, self._on_subs_context_menu)
         self.unsubscribe_btn.Bind(wx.EVT_BUTTON, self._on_unsubscribe)
         self.episodes_list.Bind(wx.EVT_LIST_ITEM_SELECTED, self._on_episode_sel_changed)
         self.episodes_list.Bind(wx.EVT_LIST_ITEM_ACTIVATED, self._on_episode_activated)
+        self.episodes_list.Bind(wx.EVT_CONTEXT_MENU, self._on_episodes_context_menu)
 
         self.controls.on_play = self._on_play
         self.controls.on_stop = self._on_stop
@@ -246,6 +249,15 @@ class PodcastPanel(scrolled.ScrolledPanel):
         self._refresh_subscriptions()
         self.set_status(f"Status: Subscribed to '{result.title}'")
 
+    def _on_results_context_menu(self, event: wx.ContextMenuEvent) -> None:
+        if self._selected_result() is None:
+            return
+        menu = wx.Menu()
+        subscribe_item = menu.Append(wx.ID_ANY, "Su&bscribe")
+        self.Bind(wx.EVT_MENU, self._on_subscribe, subscribe_item)
+        self.results_list.PopupMenu(menu, context_menu_pos(self.results_list, event))
+        menu.Destroy()
+
     # ---- subscriptions / episodes -------------------------------------------
 
     def _refresh_subscriptions(self) -> None:
@@ -274,6 +286,15 @@ class PodcastPanel(scrolled.ScrolledPanel):
             self.episodes_list.DeleteAllItems()
             self.description_ctrl.ChangeValue("")
         self.set_status(f"Status: Unsubscribed from '{podcast.title}'")
+
+    def _on_subs_context_menu(self, event: wx.ContextMenuEvent) -> None:
+        if self._selected_subscription() is None:
+            return
+        menu = wx.Menu()
+        unsubscribe_item = menu.Append(wx.ID_ANY, "&Unsubscribe")
+        self.Bind(wx.EVT_MENU, self._on_unsubscribe, unsubscribe_item)
+        self.subs_list.PopupMenu(menu, context_menu_pos(self.subs_list, event))
+        menu.Destroy()
 
     # ---- add feed / OPML import-export --------------------------------------
 
@@ -392,6 +413,15 @@ class PodcastPanel(scrolled.ScrolledPanel):
         if idx is None:
             return
         self._start_playing(self._selected_podcast, self._episodes, idx)
+
+    def _on_episodes_context_menu(self, event: wx.ContextMenuEvent) -> None:
+        if self._selected_episode_index() is None:
+            return
+        menu = wx.Menu()
+        play_item = menu.Append(wx.ID_ANY, "&Play Episode")
+        self.Bind(wx.EVT_MENU, self._on_episode_activated, play_item)
+        self.episodes_list.PopupMenu(menu, context_menu_pos(self.episodes_list, event))
+        menu.Destroy()
 
     # ---- playback ------------------------------------------------------------
 

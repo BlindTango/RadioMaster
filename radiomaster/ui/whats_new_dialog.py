@@ -48,6 +48,10 @@ class WhatsNewDialog(wx.Dialog):
         if self._versions:
             self.version_list.SetSelection(initial_index)
             self._show_version(initial_index)
+        self.Bind(wx.EVT_INIT_DIALOG, self._on_init_dialog)
+
+    def _on_init_dialog(self, event: wx.InitDialogEvent) -> None:
+        event.Skip()
         self.version_list.SetFocus()
 
     def _on_version_selected(self, event: wx.CommandEvent) -> None:
